@@ -78,3 +78,43 @@ export function createSnackPlan({ crewSize, mood, pantry }) {
     recommendation
   };
 }
+
+export function createShoppingList(plan) {
+  const snacks = Array.isArray(plan.snacks) ? plan.snacks : [];
+  const crewSize = plan.crewSize;
+  const hydrationReminder = plan.hydrationReminder;
+
+  const quantities = new Map();
+  const firstSeenOrder = [];
+  for (const snack of snacks) {
+    if (!quantities.has(snack)) {
+      quantities.set(snack, 0);
+      firstSeenOrder.push(snack);
+    }
+    quantities.set(snack, quantities.get(snack) + 1);
+  }
+
+  const categoryOrder = [...SNACK_CATEGORIES.map(([category]) => category), "other"];
+
+  const items = [];
+  for (const category of categoryOrder) {
+    for (const name of firstSeenOrder) {
+      if (categorizeSnack(name) === category) {
+        items.push({ name, quantity: quantities.get(name), category });
+      }
+    }
+  }
+
+  const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
+
+  const lines = [];
+  lines.push(`Moon crew shopping list for a crew of ${crewSize}`);
+  for (const item of items) {
+    lines.push(`- ${item.quantity}x ${item.name}`);
+  }
+  lines.push(`Total items: ${totalItems}`);
+  lines.push(hydrationReminder);
+  const printable = lines.join("\n");
+
+  return { items, totalItems, printable };
+}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createSnackPlan } from "../src/moon-pantry.js";
+import { createSnackPlan, createShoppingList } from "../src/moon-pantry.js";
 
 const plan = createSnackPlan({
   crewSize: 3,
@@ -122,6 +122,40 @@ for (const sample of [plan, fallback, messy]) {
     "recommendation should name a category present in categoryBreakdown"
   );
   assert.ok(dominant in sample.categoryBreakdown, "dominant category should appear in categoryBreakdown");
+}
+
+for (const sample of [plan, fallback, messy]) {
+  const result = createShoppingList(sample);
+
+  assert.ok(Array.isArray(result.items), "shopping list items should be an array");
+  for (const item of result.items) {
+    assert.equal(typeof item.name, "string", "item.name should be a string");
+    assert.ok(item.name.length > 0, "item.name should be non-empty");
+    assert.ok(
+      Number.isInteger(item.quantity) && item.quantity > 0,
+      "item.quantity should be a positive integer"
+    );
+    assert.ok(CATEGORIES.includes(item.category), `item.category ${item.category} should be a defined category`);
+  }
+
+  const quantitySum = result.items.reduce((sum, item) => sum + item.quantity, 0);
+  assert.equal(quantitySum, sample.snacks.length, "item quantities should sum to snacks.length");
+  assert.equal(quantitySum, result.totalItems, "item quantities should sum to totalItems");
+  assert.equal(result.totalItems, sample.snacks.length, "totalItems should equal snacks.length");
+
+  assert.equal(typeof result.printable, "string", "printable should be a string");
+  assert.ok(result.printable.length > 0, "printable should be non-empty");
+  assert.ok(
+    result.printable.includes(String(sample.crewSize)),
+    "printable should reference crew size"
+  );
+  for (const name of new Set(sample.snacks)) {
+    assert.ok(result.printable.includes(name), `printable should list snack ${name}`);
+  }
+  assert.match(result.printable, /water|hydrate|tea/i, "printable should include a hydration reminder");
+
+  const again = createShoppingList(sample);
+  assert.deepEqual(result, again, "createShoppingList should be deterministic for the same plan");
 }
 
 console.log("moon-pantry tests passed");
