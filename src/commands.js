@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cp } from "node:fs/promises";
+import { cp, realpath } from "node:fs/promises";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
@@ -624,8 +624,12 @@ async function cleanup(flags) {
 
   for (const target of targets) {
     console.log(`${apply ? "removing" : "would remove"} ${target.taskId} worktree ${target.worktree}`);
-    if (apply && (await pathExists(target.worktree))) {
-      await removeWorktree(gitRoot, target.worktree, force);
+    if (apply) {
+      if (await pathExists(target.worktree)) {
+        await removeWorktree(gitRoot, target.worktree, force);
+      } else {
+        await pruneWorktrees(gitRoot);
+      }
     }
     if (deleteBranches && target.branch) {
       console.log(`${apply ? "deleting" : "would delete"} ${target.branch}`);
@@ -653,12 +657,24 @@ function cleanupTargets(spec, taskFilter) {
 async function removeWorktree(gitRoot, worktree, force) {
   const args = ["-C", gitRoot, "worktree", "remove"];
   if (force) args.push("--force");
-  args.push(worktree);
+  args.push(await canonicalPath(worktree));
   await git(args);
+}
+
+async function pruneWorktrees(gitRoot) {
+  await git(["-C", gitRoot, "worktree", "prune"]);
 }
 
 async function deleteBranch(gitRoot, branch, force) {
   await git(["-C", gitRoot, "branch", force ? "-D" : "-d", branch]);
+}
+
+async function canonicalPath(filePath) {
+  try {
+    return await realpath(filePath);
+  } catch {
+    return filePath;
+  }
 }
 
 async function inspectCollectTask(task) {
