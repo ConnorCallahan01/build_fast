@@ -21,8 +21,10 @@ Locally, `build_fast` keys state by the parsed Notion page ID. Different Notion 
 
 ```bash
 node bin/build_fast.js doctor
+node bin/build_fast.js goal --goal "..." --ntn "<notion-url>" --project ./repo --type feature
 node bin/build_fast.js plan --goal "..." --ntn "<notion-url>" --project ./repo --type feature
 node bin/build_fast.js drive --goal "..." --ntn "<notion-url>" --project ./repo --type feature --autopilot junior_mode
+node bin/build_fast.js drive --ntn "<notion-url>" --from-goal --autopilot junior_mode
 node bin/build_fast.js start --goal "..." --ntn "<notion-url>" --project ./repo --type feature --autopilot junior_mode
 node bin/build_fast.js run --ntn "<notion-url>" --autopilot boss_mode
 node bin/build_fast.js swarm --ntn "<notion-url>" --concurrency 2 --max-tasks 2
@@ -59,6 +61,8 @@ The Notion page passed via `--ntn` must be shared with the integration. Without 
 
 ## Current MVP Limits
 
+- `goal` creates a saved goal contract before planning; use `drive --from-goal` to run from that confirmed goal.
+- `status` is a dashboard with project, Notion link, task counts, next task, collection state, and branch/worktree details.
 - `swarm` can run dependency-ready pending tasks in separate git worktrees, but merge/PR automation is not implemented yet.
 - Swarm worktrees are created under the OS temp directory and their paths are recorded in task state.
 - Swarm requires the target repository to have at least one commit because git worktrees cannot be created from an unborn `HEAD`.

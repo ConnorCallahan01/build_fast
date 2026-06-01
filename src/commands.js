@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig, ensureConfig } from "./config.js";
 import { runClaude } from "./claude.js";
-import { makeSpec, loadSpec, saveSpec, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage } from "./ledger.js";
+import { makeSpec, loadSpec, saveSpec, specDir, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage } from "./ledger.js";
 import { checkNotionPage, inspectNotionPage, markdownBlocks, NotionClient, parseNotionId, pageTitle, notionRelation, notionRichText, notionStatus, notionTitle, notionUrl } from "./notion.js";
 import { renderPrompt } from "./prompts.js";
 import { scanRepo } from "./repo-scan.js";
@@ -17,6 +17,8 @@ export async function dispatch(command, flags) {
   switch (command) {
     case "doctor":
       return doctor(flags);
+    case "goal":
+      return goal(flags);
     case "plan":
     case "tasks":
       return plan(flags);
@@ -78,6 +80,92 @@ async function commandCheck(name, args) {
   } catch (error) {
     return { name, ok: false, detail: error.message };
   }
+}
+
+async function goal(flags) {
+  const config = await ensureConfig();
+  const notionUrl = requireFlag(flags, "ntn");
+  const rawGoal = requireFlag(flags, "goal");
+  const type = optionalString(flags, "type", "feature");
+  const project = normalizeProject(optionalString(flags, "project", process.cwd()));
+  const repoContext = await scanRepo(project);
+
+  let contract;
+  if (flags["no-agent"]) {
+    contract = normalizeGoalContract(null, rawGoal, repoContext);
+  } else {
+    const prompt = await renderPrompt("goal.md", { goal: rawGoal, type, project, notionUrl, repoContext });
+    const runDir = path.join(process.cwd(), ".build_fast", "goals", `${Date.now()}`);
+    await writeJson(path.join(runDir, "repo-context.json"), repoContext);
+    const result = await runClaude({
+      config,
+      prompt,
+      projectDir: project,
+      runDir,
+      autopilot: "intern_mode",
+      permissionProfile: "inherit"
+    });
+    contract = normalizeGoalContract(result.parsed, rawGoal, repoContext);
+  }
+
+  const saved = {
+    ...contract,
+    rawGoal,
+    type,
+    project,
+    notionUrl,
+    createdAt: nowIso(),
+    repoContext: {
+      gitRoot: repoContext.gitRoot,
+      projectRelativePath: repoContext.projectRelativePath,
+      feedbackLoops: repoContext.detected.feedbackLoops,
+      scannedAt: nowIso()
+    }
+  };
+  await writeJson(goalPath(config, notionUrl), saved);
+  printGoalContract(saved);
+  console.log(`\nSaved goal contract: ${path.relative(process.cwd(), goalPath(config, notionUrl))}`);
+  console.log(`Run it with: node bin/build_fast.js drive --ntn <page> --from-goal --autopilot junior_mode --permission-profile managed`);
+}
+
+function normalizeGoalContract(parsed, rawGoal, repoContext) {
+  const source = parsed?.structured_output || parsed || {};
+  return {
+    finalGoal: source.finalGoal || rawGoal,
+    intent: source.intent || `Implement: ${rawGoal}`,
+    targetChanges: source.targetChanges || ["Implement the requested behavior in the target project."],
+    acceptanceCriteria: source.acceptanceCriteria || (repoContext?.detected?.feedbackLoops || ["Relevant checks pass."]),
+    outOfScope: source.outOfScope || [],
+    assumptions: source.assumptions || [],
+    questions: source.questions || [],
+    riskLevel: ["low", "medium", "high"].includes(source.riskLevel) ? source.riskLevel : "medium"
+  };
+}
+
+function printGoalContract(contract) {
+  console.log(`Goal Contract`);
+  console.log(`Final goal: ${contract.finalGoal}`);
+  console.log(`Intent: ${contract.intent}`);
+  console.log(`Risk: ${contract.riskLevel}`);
+  printList("Target changes", contract.targetChanges);
+  printList("Acceptance criteria", contract.acceptanceCriteria);
+  printList("Out of scope", contract.outOfScope);
+  printList("Assumptions", contract.assumptions);
+  printList("Questions", contract.questions);
+}
+
+function printList(label, items = []) {
+  if (!items.length) return;
+  console.log(`\n${label}:`);
+  for (const item of items) console.log(`- ${item}`);
+}
+
+function goalPath(config, notionUrl) {
+  return path.join(specDir(config, notionUrl), "goal.json");
+}
+
+async function loadGoalContract(config, notionUrl) {
+  return readJson(goalPath(config, notionUrl), undefined);
 }
 
 async function plan(flags) {
@@ -213,11 +301,18 @@ async function drive(flags) {
   const maxTasks = optionalString(flags, "max-tasks", concurrency);
 
   let config = await ensureConfig();
+  const goalContract = flags["from-goal"] ? await loadGoalContract(config, notionUrl) : undefined;
+  if (flags["from-goal"] && !goalContract) throw new Error("No saved goal contract found. Run `build_fast goal --goal ... --ntn ... --project ...` first.");
   let spec = await loadSpec(config, notionUrl);
-  const requestedGoal = optionalString(flags, "goal", undefined);
+  const requestedGoal = goalContract?.finalGoal || optionalString(flags, "goal", undefined);
   if (!spec || (requestedGoal && requestedGoal !== spec.goal)) {
-    if (!flags.goal) throw new Error("No local spec found. Pass --goal, --project, and --type or run plan first.");
-    await plan(flags);
+    if (!requestedGoal) throw new Error("No local spec found. Pass --goal, use --from-goal, or run plan first.");
+    await plan({
+      ...flags,
+      goal: requestedGoal,
+      project: goalContract?.project || flags.project,
+      type: goalContract?.type || flags.type
+    });
     config = await loadConfig();
     spec = await loadSpec(config, notionUrl);
   }
@@ -627,15 +722,51 @@ async function status(flags) {
     console.log("No local spec found.");
     return;
   }
+  const counts = taskCounts(spec);
+  const next = readyPendingTasks(spec)[0];
+  const collection = await collectSummary(config, notionUrl, spec, undefined, { skipMissing: true });
+
   console.log(`${spec.title} [${spec.status}]`);
+  console.log(`Project: ${spec.project}`);
+  console.log(`Notion: ${spec.notion?.specPageUrl || spec.notionUrl || notionUrl}`);
+  console.log(`Tasks: ${counts.completed}/${counts.total} completed, ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.failed} failed, ${counts.collected} collected`);
+  console.log(`Next: ${next ? `${next.id} ${next.title}` : "none"}`);
+  if (spec.repoContext?.feedbackLoops?.length) console.log(`Feedback: ${spec.repoContext.feedbackLoops.join(" | ")}`);
+  if (collection.overlaps.length) {
+    console.log(`Collect: overlaps detected`);
+    for (const overlap of collection.overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
+    if (collection.recommendation) console.log(`  recommended: ${collection.recommendation.task.id} (${collection.recommendation.reason})`);
+  } else if (collection.reports.length) {
+    console.log(`Collect: ${collection.reports.length} completed worktree output${collection.reports.length === 1 ? "" : "s"} available`);
+  } else {
+    console.log(`Collect: no available worktree output`);
+  }
+
+  console.log(`\nTasks:`);
   for (const task of spec.tasks) {
     const collected = task.collectedAt ? " [collected]" : "";
-    console.log(`${task.status.padEnd(10)} ${task.id} ${task.title}${collected}`);
+    const branch = task.lastResult?.branch ? ` branch=${task.lastResult.branch}` : "";
+    const worktreeExists = task.lastResult?.worktree ? await pathExists(task.lastResult.worktree) : false;
+    const worktree = task.lastResult?.worktree ? ` worktree=${worktreeExists ? task.lastResult.worktree : "cleaned"}` : "";
+    console.log(`${task.status.padEnd(11)} ${task.id} ${task.title}${collected}`);
+    if (branch || worktree) console.log(`            ${branch}${worktree}`.trimEnd());
   }
   if (workers.length) {
     console.log("\nActive workers:");
     for (const worker of workers) console.log(`${worker.runId} ${worker.taskId} ${worker.status}`);
   }
+}
+
+function taskCounts(spec) {
+  const tasks = spec.tasks || [];
+  return {
+    total: tasks.length,
+    completed: tasks.filter((task) => task.status === "completed").length,
+    pending: tasks.filter((task) => task.status === "pending").length,
+    inProgress: tasks.filter((task) => task.status === "in_progress").length,
+    failed: tasks.filter((task) => task.status === "failed").length,
+    collected: tasks.filter((task) => task.collectedAt).length
+  };
 }
 
 async function sync(flags) {

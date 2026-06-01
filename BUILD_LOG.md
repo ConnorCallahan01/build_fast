@@ -371,3 +371,26 @@ Fixed `drive` so:
 - Swarm branch names are now flat (`build-fast-<slug>-<task>`) to avoid nested git ref/path issues.
 
 This preserves resume behavior while making explicit goals authoritative.
+
+### Step 27: Goal Contract Stage
+
+Added a structured goal-shaping stage:
+
+- `goal --goal ... --ntn <page> --project <dir> --type <type>` scans the repo and asks Claude to produce a goal contract.
+- The contract captures finalGoal, intent, targetChanges, acceptanceCriteria, outOfScope, assumptions, questions, and riskLevel.
+- The contract is saved under the Notion-keyed local spec directory as `goal.json`.
+- `drive --from-goal --ntn <page>` uses the saved `finalGoal` as the authoritative goal.
+- `goal --no-agent` provides a deterministic local smoke path.
+
+This separates "what the user wants" from planning/execution and gives the user a confirmation artifact before agents start coding.
+
+### Step 28: Status Dashboard
+
+Expanded `status` from a task list into a lightweight dashboard:
+
+- Shows project path and Notion spec URL.
+- Shows task counts by state and collected count.
+- Shows the next runnable task.
+- Shows feedback loops from repo-aware planning.
+- Shows collection overlap warnings and recommended integration task.
+- Shows task branch/worktree metadata when present.
