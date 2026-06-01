@@ -1,6 +1,6 @@
 .build_fast/
 .firecrawl/
 node_modules/
+test_projects/
 *.log
 .DS_Store
-

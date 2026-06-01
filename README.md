@@ -38,16 +38,69 @@ The CLI accepts a Notion target on every command:
 NTN="https://www.notion.so/your-page-id"
 ```
 
-The target page should contain data sources compatible with the current MVP:
+The target page should be a regular Notion page shared with your integration. Inside that page, create two inline databases.
 
-- `Specs` data source with at least `Name`, `Status`, and `Project`
-- `Spec Tasks` data source with at least `Name`, `Status`, `Spec`, and `Branch`
+### Specs Database
+
+Create an inline database named `Build Specs`. Its primary data source should be named `Specs`.
+
+Required properties:
+
+| Property | Type | Notes |
+| --- | --- | --- |
+| `Name` | Title | Spec title |
+| `Status` | Status | Use options `Draft`, `Ready`, `Building`, `Shipped` |
+| `Project` | Text | Absolute or relative project path |
+
+Recommended optional properties:
+
+| Property | Type | Notes |
+| --- | --- | --- |
+| `Spec ID` | Unique ID | Helpful for display |
+| `GitHub Repo` | URL | Reserved for future repo linking |
+| `GitHub PR` | URL | Reserved for future PR automation |
+
+### Tasks Database
+
+Create a second inline database named `Spec Tasks`. Its primary data source should be named `Spec Tasks`.
+
+Required properties:
+
+| Property | Type | Notes |
+| --- | --- | --- |
+| `Name` | Title | Task title |
+| `Status` | Status | Use options `Not started`, `In progress`, `Done` |
+| `Spec` | Relation | Relates to the `Specs` data source |
+| `Branch` | Text | Branch/worktree used by the task |
+
+Recommended optional properties:
+
+| Property | Type | Notes |
+| --- | --- | --- |
+| `Order` | Unique ID | Helpful for sorting |
+
+### Integration Access
+
+In Notion:
+
+1. Create an internal integration and copy its API token.
+2. Share the parent Notion page with that integration.
+3. Make sure both inline databases are visible on the shared page.
+4. Export the token in your shell:
+
+```bash
+export NOTION_API_TOKEN=secret_...
+```
+
+Then inspect the page:
 
 Inspect a page:
 
 ```bash
 node bin/build_fast.js inspect --ntn "$NTN"
 ```
+
+You should see both data sources and their properties. If `sync` cannot find the data sources, check the data source names and property names first.
 
 Local state is keyed by the parsed Notion page ID under `.build_fast/specs/<id>/`.
 
@@ -59,9 +112,9 @@ Start with the interactive goal contract. This is the main human checkpoint befo
 
 ```bash
 node bin/build_fast.js goal \
-  --goal "Add a small CLI demo mode for Moon Pantry that prints a sample plan and shopping list" \
+  --goal "Add a small CLI demo mode that prints a sample workflow" \
   --type feature \
-  --project test_projects/moon_pantry \
+  --project /path/to/your/project \
   --ntn "$NTN"
 ```
 
@@ -91,7 +144,7 @@ For automation or smoke tests, skip the prompt:
 node bin/build_fast.js goal \
   --goal "..." \
   --type feature \
-  --project ./repo \
+  --project /path/to/your/project \
   --ntn "$NTN" \
   --yes
 ```
@@ -132,10 +185,8 @@ Autopilot behavior:
 Run the target project’s checks yourself after `drive`:
 
 ```bash
-cd test_projects/moon_pantry
+cd /path/to/your/project
 npm test
-npm run demo
-cd ../..
 ```
 
 Check build_fast state:
@@ -164,7 +215,7 @@ Create a repo-aware plan directly:
 node bin/build_fast.js plan \
   --goal "..." \
   --type feature \
-  --project ./repo \
+  --project /path/to/your/project \
   --ntn "$NTN"
 ```
 
@@ -243,10 +294,10 @@ Review support is still basic. Integration review is a good next improvement.
 
 ```bash
 node bin/build_fast.js doctor --ntn "$NTN"
-node bin/build_fast.js goal --goal "..." --ntn "$NTN" --project ./repo --type feature
-node bin/build_fast.js plan --goal "..." --ntn "$NTN" --project ./repo --type feature
+node bin/build_fast.js goal --goal "..." --ntn "$NTN" --project /path/to/your/project --type feature
+node bin/build_fast.js plan --goal "..." --ntn "$NTN" --project /path/to/your/project --type feature
 node bin/build_fast.js drive --ntn "$NTN" --from-goal --autopilot junior_mode
-node bin/build_fast.js drive --goal "..." --ntn "$NTN" --project ./repo --type feature
+node bin/build_fast.js drive --goal "..." --ntn "$NTN" --project /path/to/your/project --type feature
 node bin/build_fast.js swarm --ntn "$NTN" --concurrency 2 --max-tasks 2
 node bin/build_fast.js collect --ntn "$NTN"
 node bin/build_fast.js collect --ntn "$NTN" --task task-003 --apply
@@ -265,7 +316,7 @@ Local planning without agents:
 node bin/build_fast.js goal \
   --goal "Smoke test" \
   --type chore \
-  --project test_projects/moon_pantry \
+  --project /path/to/your/project \
   --ntn local-smoke \
   --no-agent \
   --yes
@@ -273,13 +324,11 @@ node bin/build_fast.js goal \
 node bin/build_fast.js drive --ntn local-smoke --from-goal --no-agent
 ```
 
-Project fixture:
+Target project checks:
 
 ```bash
-cd test_projects/moon_pantry
+cd /path/to/your/project
 npm test
-npm run demo
-cd ../..
 ```
 
 Root checks:
@@ -288,6 +337,8 @@ Root checks:
 npm run check
 npm test
 ```
+
+Local throwaway fixtures should live outside the published repo or under ignored paths. This repo ignores `test_projects/` by default.
 
 ## Troubleshooting
 
