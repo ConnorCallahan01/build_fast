@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { cp, realpath } from "node:fs/promises";
+import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
@@ -122,10 +123,70 @@ async function goal(flags) {
       scannedAt: nowIso()
     }
   };
-  await writeJson(goalPath(config, notionUrl), saved);
-  printGoalContract(saved);
+  const finalContract = await confirmGoalContract(saved, flags);
+  if (!finalContract) {
+    console.log("Goal contract cancelled.");
+    return;
+  }
+  await writeJson(goalPath(config, notionUrl), finalContract);
   console.log(`\nSaved goal contract: ${path.relative(process.cwd(), goalPath(config, notionUrl))}`);
   console.log(`Run it with: node bin/build_fast.js drive --ntn <page> --from-goal --autopilot junior_mode --permission-profile managed`);
+}
+
+async function confirmGoalContract(contract, flags) {
+  printGoalContract(contract);
+  if (!shouldPrompt(flags)) return contract;
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    while (true) {
+      const answer = (await rl.question("\nApprove goal contract? [a]pprove, [e]dit, [q]uit: ")).trim().toLowerCase();
+      if (!answer || answer === "a" || answer === "approve" || answer === "y" || answer === "yes") {
+        return { ...contract, approvedAt: nowIso() };
+      }
+      if (answer === "q" || answer === "quit" || answer === "cancel") return null;
+      if (answer === "e" || answer === "edit") {
+        contract = await editGoalContract(rl, contract);
+        printGoalContract(contract);
+      } else {
+        console.log("Please choose approve, edit, or quit.");
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+function shouldPrompt(flags) {
+  if (flags.yes || flags.y || flags["non-interactive"] || flags["no-interactive"]) return false;
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+async function editGoalContract(rl, contract) {
+  const finalGoal = await askOptional(rl, "Final goal", contract.finalGoal);
+  const targetNote = await askOptional(rl, "Add target change note", "");
+  const acceptanceNote = await askOptional(rl, "Add acceptance criterion", "");
+  const outOfScopeNote = await askOptional(rl, "Add out-of-scope note", "");
+  const assumptionNote = await askOptional(rl, "Add assumption", "");
+  return {
+    ...contract,
+    finalGoal,
+    targetChanges: appendIfPresent(contract.targetChanges, targetNote),
+    acceptanceCriteria: appendIfPresent(contract.acceptanceCriteria, acceptanceNote),
+    outOfScope: appendIfPresent(contract.outOfScope, outOfScopeNote),
+    assumptions: appendIfPresent(contract.assumptions, assumptionNote),
+    revisedAt: nowIso()
+  };
+}
+
+async function askOptional(rl, label, current) {
+  const suffix = current ? ` [${current}]` : "";
+  const answer = await rl.question(`${label}${suffix}: `);
+  return answer.trim() || current;
+}
+
+function appendIfPresent(items = [], value) {
+  return value ? [...items, value] : items;
 }
 
 function normalizeGoalContract(parsed, rawGoal, repoContext) {

@@ -384,6 +384,14 @@ Added a structured goal-shaping stage:
 
 This separates "what the user wants" from planning/execution and gives the user a confirmation artifact before agents start coding.
 
+Updated the goal stage to be interactive in TTY terminals:
+
+- After drafting the contract, the CLI asks the user to approve, edit, or quit.
+- Edit mode can revise the final goal and append target-change, acceptance, out-of-scope, and assumption notes.
+- `--yes` or `--non-interactive` skips prompting for automation.
+
+This makes the goal contract an explicit user-confirmed checkpoint before `drive --from-goal`.
+
 ### Step 28: Status Dashboard
 
 Expanded `status` from a task list into a lightweight dashboard:
