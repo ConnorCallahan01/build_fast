@@ -358,3 +358,16 @@ Added `drive` as the first end-to-end runner:
 - Syncs to Notion again when checks pass.
 
 Also made cleanup tolerate already-deleted task branches so repeated cleanup runs are less brittle.
+
+### Step 26: Drive Fresh-Goal Detection
+
+The first real `drive --goal ...` test reused the existing completed spec for the same Notion page and ignored the newly supplied goal. That made `drive` run feedback checks for the previous spec instead of planning new work.
+
+Fixed `drive` so:
+
+- `drive --ntn <page>` resumes the existing local spec.
+- `drive --ntn <page> --goal "new goal"` replans when the supplied goal differs from the stored spec goal.
+- `drive --no-agent` now stops after plan/sync for a local smoke test instead of continuing into swarm.
+- Swarm branch names are now flat (`build-fast-<slug>-<task>`) to avoid nested git ref/path issues.
+
+This preserves resume behavior while making explicit goals authoritative.

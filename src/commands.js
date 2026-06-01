@@ -214,7 +214,8 @@ async function drive(flags) {
 
   let config = await ensureConfig();
   let spec = await loadSpec(config, notionUrl);
-  if (!spec) {
+  const requestedGoal = optionalString(flags, "goal", undefined);
+  if (!spec || (requestedGoal && requestedGoal !== spec.goal)) {
     if (!flags.goal) throw new Error("No local spec found. Pass --goal, --project, and --type or run plan first.");
     await plan(flags);
     config = await loadConfig();
@@ -222,6 +223,10 @@ async function drive(flags) {
   }
 
   await sync({ ntn: notionUrl });
+  if (flags["no-agent"]) {
+    console.log("Drive no-agent smoke complete after plan/sync.");
+    return;
+  }
 
   let iterations = 0;
   const maxIterations = Math.max(1, Number(optionalString(flags, "max-iterations", "20")));
@@ -483,7 +488,7 @@ async function resolveGitHead(root) {
 }
 
 function buildWorktreeAssignment(spec, task, gitContext) {
-  const branch = `build-fast/${spec.slug}/${task.id}`;
+  const branch = `build-fast-${spec.slug}-${task.id}`;
   const worktreeDir = path.join(os.tmpdir(), "build_fast-worktrees", path.basename(gitContext.root), spec.slug, task.id);
   return {
     spec,
