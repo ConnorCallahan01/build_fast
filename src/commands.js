@@ -253,6 +253,7 @@ async function drive(flags) {
 
     const shouldApply = shouldDriveApply(autopilot, collection);
     if (shouldApply.apply) {
+      console.log(`Drive applying ${shouldApply.taskId}: ${shouldApply.reason}`);
       await collect({ ntn: notionUrl, task: shouldApply.taskId, apply: true });
     } else {
       console.log(`Drive stopped before collection apply: ${shouldApply.reason}`);
@@ -280,10 +281,10 @@ function shouldDriveApply(autopilot, collection) {
   if (autopilot === "intern_mode") return { apply: false, reason: "intern_mode requires manual collection apply" };
   if (!collection.overlaps.length) {
     const latest = [...collection.reports].sort((a, b) => (b.task.order || 0) - (a.task.order || 0))[0];
-    return { apply: true, taskId: latest.task.id };
+    return { apply: true, taskId: latest.task.id, reason: "latest completed task output has no overlapping file conflicts" };
   }
   if (collection.recommendation && (autopilot === "junior_mode" || autopilot === "boss_mode")) {
-    return { apply: true, taskId: collection.recommendation.task.id };
+    return { apply: true, taskId: collection.recommendation.task.id, reason: collection.recommendation.reason };
   }
   return { apply: false, reason: "overlapping task outputs need manual choice" };
 }
