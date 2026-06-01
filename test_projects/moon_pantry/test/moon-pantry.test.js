@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createSnackPlan, createShoppingList } from "../src/moon-pantry.js";
 
 const plan = createSnackPlan({
@@ -157,5 +158,15 @@ for (const sample of [plan, fallback, messy]) {
   const again = createShoppingList(sample);
   assert.deepEqual(result, again, "createShoppingList should be deterministic for the same plan");
 }
+
+const demoOutput = execFileSync("node", ["src/demo.js"], { encoding: "utf8" });
+assert.match(demoOutput, /Moon Pantry/, "demo should include the Moon Pantry title");
+assert.match(demoOutput, /_..._/, "demo should include ASCII art");
+assert.match(demoOutput, /=== Moon Pantry Snack Plan ===/, "demo should include a snack plan section");
+assert.match(demoOutput, /=== Shopping List ===/, "demo should include a shopping list section");
+assert.match(demoOutput, /Moon crew shopping list for a crew of 3/, "demo should include the crew shopping list title");
+assert.match(demoOutput, /- \d+x .+/, "demo should include quantity snack lines");
+assert.match(demoOutput, /Total items: 3/, "demo should include total items");
+assert.match(demoOutput, /water|hydrate|tea/i, "demo should include a hydration reminder");
 
 console.log("moon-pantry tests passed");

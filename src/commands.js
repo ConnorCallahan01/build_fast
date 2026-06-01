@@ -511,10 +511,20 @@ function firstOutputLine(value) {
 function normalizeFeedbackCommand(command) {
   const value = String(command || "").trim();
   if (!value) return "";
-  return value
+  const normalized = value
+    .replace(/\s+[—–]\s+.*$/s, "")
     .replace(/\s+\([^)]*\)\s*$/s, "")
     .replace(/\s+-\s+.*$/s, "")
     .trim();
+  if (!isRunnableFeedbackCommand(normalized)) return "";
+  return normalized;
+}
+
+function isRunnableFeedbackCommand(command) {
+  if (!command || command.includes("<") || command.includes(">")) return false;
+  if (/\b(on|against|with)\s+the\b/i.test(command)) return false;
+  const executable = command.split(/\s+/)[0];
+  return ["npm", "node", "git", "npx", "pnpm", "yarn", "cargo", "python", "python3", "pytest", "go", "make"].includes(executable);
 }
 
 async function swarm(flags) {
@@ -816,7 +826,7 @@ async function status(flags) {
   }
   const counts = taskCounts(spec);
   const next = readyPendingTasks(spec)[0];
-  const collection = await collectSummary(config, notionUrl, spec, undefined, { skipMissing: true });
+  const collection = await collectSummary(config, notionUrl, spec, undefined, { uncollectedOnly: true, skipMissing: true });
 
   console.log(`${spec.title} [${spec.status}]`);
   console.log(`Project: ${spec.project}`);
@@ -941,10 +951,18 @@ async function collect(flags) {
   if (apply) {
     for (const report of reports) {
       await applyCollectReport({ report, projectRoot });
+      const collectedAt = nowIso();
       nextSpec = updateTask(nextSpec, report.task.id, {
-        collectedAt: nowIso(),
+        collectedAt,
         collectedFiles: report.changedFiles
       });
+      for (const overlay of report.task.lastResult?.dependencyOverlays || []) {
+        nextSpec = updateTask(nextSpec, overlay.taskId, {
+          collectedAt,
+          collectedBy: report.task.id,
+          collectedFiles: overlay.files || []
+        });
+      }
     }
     await saveSpec(config, notionUrl, nextSpec);
   }
@@ -965,10 +983,11 @@ async function collect(flags) {
 }
 
 async function collectSummary(config, notionUrl, spec, taskFilter = undefined, options = {}) {
+  const coveredByCollected = collectedOverlayTaskIds(spec);
   const tasks = (spec.tasks || [])
     .filter((task) => task.status === "completed")
     .filter((task) => !taskFilter || task.id === taskFilter)
-    .filter((task) => !options.uncollectedOnly || !task.collectedAt)
+    .filter((task) => !options.uncollectedOnly || (!task.collectedAt && !coveredByCollected.has(task.id)))
     .filter((task) => task.lastResult?.worktree);
   const reports = [];
   for (const task of tasks) {
@@ -981,6 +1000,17 @@ async function collectSummary(config, notionUrl, spec, taskFilter = undefined, o
     overlaps,
     recommendation: collectRecommendation(reports, overlaps)
   };
+}
+
+function collectedOverlayTaskIds(spec) {
+  const ids = new Set();
+  for (const task of spec.tasks || []) {
+    if (!task.collectedAt) continue;
+    for (const overlay of task.lastResult?.dependencyOverlays || []) {
+      if (overlay.taskId) ids.add(overlay.taskId);
+    }
+  }
+  return ids;
 }
 
 async function cleanup(flags) {

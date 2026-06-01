@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node test/moon-pantry.test.js"
+    "test": "node test/moon-pantry.test.js",
+    "demo": "node src/demo.js"
   }
 }
 
