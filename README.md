@@ -62,6 +62,7 @@ The Notion page passed via `--ntn` must be shared with the integration. Without 
 - Swarm worktrees are created under the OS temp directory and their paths are recorded in task state.
 - Swarm requires the target repository to have at least one commit because git worktrees cannot be created from an unborn `HEAD`.
 - `collect` reports completed task worktree changes by default; `--apply` copies those changed files into the main checkout. If multiple tasks changed the same file, apply requires `--task <id>` or `--force`.
+- When overlapping task outputs exist, `collect` recommends the latest dependency-chain task that contains every overlapped file.
 - `cleanup` reports recorded swarm worktrees by default; `--apply` removes them, and `--branches` also deletes task branches.
 - Notion data-source mapping currently expects `Specs` and `Spec Tasks` data sources with the MVP property names.
 - Claude Code is the only worker adapter implemented.

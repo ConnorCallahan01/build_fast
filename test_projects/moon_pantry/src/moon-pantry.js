@@ -6,6 +6,23 @@ const DEFAULT_SNACKS = [
   "gravity-free grapes"
 ];
 
+const SNACK_CATEGORIES = [
+  ["drink", ["tea", "water", "soup", "juice"]],
+  ["fruit", ["grape", "mango", "fruit", "berry"]],
+  ["crunchy", ["cracker", "chip", "mix", "nut", "crisp"]],
+  ["savory", ["cheese", "miso"]]
+];
+
+function categorizeSnack(name) {
+  const lower = String(name).toLowerCase();
+  for (const [category, keywords] of SNACK_CATEGORIES) {
+    for (const keyword of keywords) {
+      if (lower.includes(keyword)) return category;
+    }
+  }
+  return "other";
+}
+
 export function createSnackPlan({ crewSize, mood, pantry }) {
   const size = Number.isInteger(crewSize) && crewSize > 0 ? crewSize : 1;
 
@@ -29,6 +46,26 @@ export function createSnackPlan({ crewSize, mood, pantry }) {
   const distinctSnacks = [...new Set(snacks)];
   const varietyScore = distinctSnacks.length;
 
+  const categoryBreakdown = {};
+  for (const snack of snacks) {
+    const category = categorizeSnack(snack);
+    categoryBreakdown[category] = (categoryBreakdown[category] || 0) + 1;
+  }
+
+  const categoryOrder = [...SNACK_CATEGORIES.map(([category]) => category), "other"];
+  let dominantCategory = categoryOrder[categoryOrder.length - 1];
+  let dominantCount = -1;
+  for (const category of categoryOrder) {
+    const count = categoryBreakdown[category] || 0;
+    if (count > dominantCount) {
+      dominantCount = count;
+      dominantCategory = category;
+    }
+  }
+
+  const varietyLabel = varietyScore >= size ? "good variety" : "low variety";
+  const recommendation = `For your crew of ${size} feeling ${mood}, expect ${varietyLabel} (${varietyScore} distinct snacks) with mostly ${dominantCategory} snacks.`;
+
   return {
     crewSize: size,
     mood,
@@ -36,6 +73,8 @@ export function createSnackPlan({ crewSize, mood, pantry }) {
     hydrationReminder: "Remember to sip water or warm tea to stay hydrated.",
     summary: `A calm, quiet snack plan to help the ${mood} moon crew rest easy.`,
     varietyScore,
-    distinctSnacks
+    distinctSnacks,
+    categoryBreakdown,
+    recommendation
   };
 }

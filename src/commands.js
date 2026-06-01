@@ -569,15 +569,17 @@ async function collect(flags) {
 
   const reports = await Promise.all(tasks.map((task) => inspectCollectTask(task)));
   const overlaps = overlappingChangedFiles(reports);
+  const recommendation = collectRecommendation(reports, overlaps);
   if (apply && overlaps.length && !taskFilter && !force) {
     printCollectReports(reports, false);
     throw new Error(
       [
         "Collect refused because multiple completed task worktrees changed the same file.",
         "Use --task <id> to apply one task, or rerun with --force to apply all in task order.",
+        recommendation ? `Recommended: node bin/build_fast.js collect --ntn <page> --task ${recommendation.task.id} --apply` : null,
         "Overlaps:",
         ...overlaps.map((overlap) => `- ${overlap.file}: ${overlap.taskIds.join(", ")}`)
-      ].join("\n")
+      ].filter(Boolean).join("\n")
     );
   }
 
@@ -600,6 +602,10 @@ async function collect(flags) {
     if (overlaps.length) {
       console.log("Overlapping changed files detected:");
       for (const overlap of overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
+      if (recommendation) {
+        console.log(`Recommended integration task: ${recommendation.task.id} (${recommendation.reason})`);
+        console.log(`Apply with: node bin/build_fast.js collect --ntn <page> --task ${recommendation.task.id} --apply`);
+      }
     }
   }
 }
@@ -716,6 +722,30 @@ function overlappingChangedFiles(reports) {
   return [...byFile.entries()]
     .filter(([, taskIds]) => taskIds.length > 1)
     .map(([file, taskIds]) => ({ file, taskIds }));
+}
+
+function collectRecommendation(reports, overlaps) {
+  if (!reports.length) return null;
+  const overlappedFiles = new Set(overlaps.map((overlap) => overlap.file));
+  const candidates = reports
+    .filter((report) => {
+      if (!overlappedFiles.size) return true;
+      const files = new Set(report.changedFiles);
+      return [...overlappedFiles].every((file) => files.has(file));
+    })
+    .sort((a, b) => {
+      const dependencyDelta = (b.task.lastResult?.dependencyOverlays?.length || 0) - (a.task.lastResult?.dependencyOverlays?.length || 0);
+      if (dependencyDelta !== 0) return dependencyDelta;
+      const orderDelta = (b.task.order || 0) - (a.task.order || 0);
+      if (orderDelta !== 0) return orderDelta;
+      return b.changedFiles.length - a.changedFiles.length;
+    });
+  const report = candidates[0] || [...reports].sort((a, b) => (b.task.order || 0) - (a.task.order || 0))[0];
+  if (!report) return null;
+  const reason = overlappedFiles.size
+    ? "it contains every overlapped file and is latest in the dependency chain"
+    : "it is the latest completed worktree-backed task";
+  return { task: report.task, reason };
 }
 
 async function worktreeChangedFiles(worktree) {

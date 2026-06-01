@@ -79,4 +79,49 @@ for (const sample of [plan, fallback, messy]) {
   }
 }
 
+const CATEGORIES = ["drink", "fruit", "crunchy", "savory", "other"];
+
+for (const sample of [plan, fallback, messy]) {
+  assert.equal(typeof sample.recommendation, "string", "recommendation should be a string");
+  assert.ok(sample.recommendation.length > 0, "recommendation should be non-empty");
+  assert.ok(
+    sample.recommendation.includes(String(sample.crewSize)),
+    "recommendation should reference crew size"
+  );
+  assert.match(sample.recommendation, /variety/i, "recommendation should reference variety");
+  assert.ok(
+    sample.recommendation.includes(String(sample.varietyScore)),
+    "recommendation should reference the variety score"
+  );
+
+  assert.ok(
+    sample.categoryBreakdown && typeof sample.categoryBreakdown === "object" && !Array.isArray(sample.categoryBreakdown),
+    "categoryBreakdown should be a plain object"
+  );
+  const keys = Object.keys(sample.categoryBreakdown);
+  assert.ok(keys.length > 0, "categoryBreakdown should have at least one category");
+  for (const key of keys) {
+    assert.ok(CATEGORIES.includes(key), `categoryBreakdown key ${key} should be a defined category`);
+    const count = sample.categoryBreakdown[key];
+    assert.ok(Number.isInteger(count) && count > 0, `categoryBreakdown count for ${key} should be a positive integer`);
+  }
+  const total = Object.values(sample.categoryBreakdown).reduce((a, b) => a + b, 0);
+  assert.equal(total, sample.snacks.length, "categoryBreakdown counts should sum to snacks.length");
+
+  let dominant = CATEGORIES[CATEGORIES.length - 1];
+  let dominantCount = -1;
+  for (const category of CATEGORIES) {
+    const count = sample.categoryBreakdown[category] || 0;
+    if (count > dominantCount) {
+      dominantCount = count;
+      dominant = category;
+    }
+  }
+  assert.ok(
+    sample.recommendation.includes(dominant),
+    "recommendation should name a category present in categoryBreakdown"
+  );
+  assert.ok(dominant in sample.categoryBreakdown, "dominant category should appear in categoryBreakdown");
+}
+
 console.log("moon-pantry tests passed");

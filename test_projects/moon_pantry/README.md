@@ -16,4 +16,6 @@ The tests should pass once `src/moon-pantry.js` returns a snack plan with:
 - at least one snack per crew member
 - a hydration reminder
 - a calm summary string
+- a `recommendation`: a tailored summary string that reflects crew size, mood, snack variety, and the dominant snack category
+- a `categoryBreakdown`: a map of snack category to count whose values sum to the number of planned snacks
 

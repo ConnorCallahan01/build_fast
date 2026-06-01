@@ -320,3 +320,14 @@ Added `cleanup`:
 - `--branches` also deletes task branches when combined with `--apply`.
 
 This gives each big run a way to reset local swarm artifacts.
+
+### Step 23: Collection Recommendation
+
+The second big run showed dependency overlays working: task 005's worktree contained the integrated source, tests, and docs from its dependency chain. `collect` still reported overlaps across task worktrees, which is correct, but it left the user to infer which task should be applied.
+
+Added a collection recommendation:
+
+- Dry-run `collect` now recommends the latest dependency-chain task that contains every overlapped file.
+- Refused multi-task `collect --apply` includes the recommended `--task <id> --apply` command.
+
+For the Moon Pantry recommendation/category run, this should recommend task 005.
