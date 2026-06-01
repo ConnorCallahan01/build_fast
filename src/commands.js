@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { cp } from "node:fs/promises";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,10 @@ export async function dispatch(command, flags) {
       return sync(flags);
     case "compact":
       return compact(flags);
+    case "collect":
+      return collect(flags);
+    case "cleanup":
+      return cleanup(flags);
     case "inspect":
       return inspect(flags);
     case "stop":
@@ -209,13 +214,15 @@ async function swarm(flags) {
   for (const task of candidates) {
     const assignment = buildWorktreeAssignment(spec, task, gitContext);
     await ensureWorktree(assignment);
+    await overlayDependencyWorktrees(assignment);
     assignments.push(assignment);
     spec = updateTask(spec, task.id, {
       status: "in_progress",
       summary: `Swarm worker started in ${assignment.worktreeDir}`,
       lastResult: {
         branch: assignment.branch,
-        worktree: assignment.worktreeDir
+        worktree: assignment.worktreeDir,
+        dependencyOverlays: assignment.dependencyOverlays
       }
     });
     await updateNotionTaskStatus(config, notionUrl, task, "In progress");
@@ -234,7 +241,8 @@ async function swarm(flags) {
       lastResult: {
         ...(result.patch.lastResult || {}),
         branch: result.assignment.branch,
-        worktree: result.assignment.worktreeDir
+        worktree: result.assignment.worktreeDir,
+        dependencyOverlays: result.assignment.dependencyOverlays
       }
     });
     await saveSpec(config, notionUrl, latest);
@@ -243,7 +251,8 @@ async function swarm(flags) {
       lastResult: {
         ...(result.patch.lastResult || {}),
         branch: result.assignment.branch,
-        worktree: result.assignment.worktreeDir
+        worktree: result.assignment.worktreeDir,
+        dependencyOverlays: result.assignment.dependencyOverlays
       }
     });
   }
@@ -352,13 +361,39 @@ function buildWorktreeAssignment(spec, task, gitContext) {
     worktreeDir,
     workerProjectDir: path.join(worktreeDir, gitContext.projectRelativePath),
     gitRoot: gitContext.root,
-    baseHead: gitContext.head
+    baseHead: gitContext.head,
+    dependencyOverlays: []
   };
 }
 
 async function ensureWorktree(assignment) {
   if (await pathExists(assignment.worktreeDir)) return;
   await git(["-C", assignment.gitRoot, "worktree", "add", "-B", assignment.branch, assignment.worktreeDir, "HEAD"]);
+}
+
+async function overlayDependencyWorktrees(assignment) {
+  const dependencies = dependencyTasksFor(assignment.spec, assignment.task);
+  for (const dependency of dependencies) {
+    const dependencyWorktree = dependency.lastResult?.worktree;
+    if (!dependencyWorktree || !(await pathExists(dependencyWorktree))) continue;
+    const files = await worktreeChangedFiles(dependencyWorktree);
+    for (const file of files) {
+      if (isUnsafeRelativePath(file)) {
+        throw new Error(`Refusing to overlay unsafe dependency path from ${dependency.id}: ${file}`);
+      }
+      await cp(path.join(dependencyWorktree, file), path.join(assignment.worktreeDir, file), { recursive: true });
+    }
+    assignment.dependencyOverlays.push({
+      taskId: dependency.id,
+      worktree: dependencyWorktree,
+      files
+    });
+  }
+}
+
+function dependencyTasksFor(spec, task) {
+  const byId = new Map((spec.tasks || []).map((candidate) => [candidate.id, candidate]));
+  return (task.dependencies || []).map((dependencyId) => byId.get(dependencyId)).filter(Boolean);
 }
 
 async function git(args) {
@@ -457,7 +492,8 @@ async function status(flags) {
   }
   console.log(`${spec.title} [${spec.status}]`);
   for (const task of spec.tasks) {
-    console.log(`${task.status.padEnd(10)} ${task.id} ${task.title}`);
+    const collected = task.collectedAt ? " [collected]" : "";
+    console.log(`${task.status.padEnd(10)} ${task.id} ${task.title}${collected}`);
   }
   if (workers.length) {
     console.log("\nActive workers:");
@@ -509,6 +545,174 @@ async function compact(flags) {
   }
 
   console.log(`Compacted ${deleted} old run section${deleted === 1 ? "" : "s"} and refreshed ${refreshed} snapshot page${refreshed === 1 ? "" : "s"}.`);
+}
+
+async function collect(flags) {
+  const config = await loadConfig();
+  const notionUrl = requireFlag(flags, "ntn");
+  const spec = await loadSpec(config, notionUrl);
+  if (!spec) throw new Error("No local spec found. Run plan first.");
+
+  const apply = flags.apply === true || flags.apply === "true";
+  const force = flags.force === true || flags.force === "true";
+  const taskFilter = optionalString(flags, "task", undefined);
+  const projectRoot = await resolveGitRoot(spec.project);
+  const tasks = (spec.tasks || [])
+    .filter((task) => task.status === "completed")
+    .filter((task) => !taskFilter || task.id === taskFilter)
+    .filter((task) => task.lastResult?.worktree);
+
+  if (!tasks.length) {
+    console.log("No completed worktree-backed tasks found to collect.");
+    return;
+  }
+
+  const reports = await Promise.all(tasks.map((task) => inspectCollectTask(task)));
+  const overlaps = overlappingChangedFiles(reports);
+  if (apply && overlaps.length && !taskFilter && !force) {
+    printCollectReports(reports, false);
+    throw new Error(
+      [
+        "Collect refused because multiple completed task worktrees changed the same file.",
+        "Use --task <id> to apply one task, or rerun with --force to apply all in task order.",
+        "Overlaps:",
+        ...overlaps.map((overlap) => `- ${overlap.file}: ${overlap.taskIds.join(", ")}`)
+      ].join("\n")
+    );
+  }
+
+  let nextSpec = spec;
+  if (apply) {
+    for (const report of reports) {
+      await applyCollectReport({ report, projectRoot });
+      nextSpec = updateTask(nextSpec, report.task.id, {
+        collectedAt: nowIso(),
+        collectedFiles: report.changedFiles
+      });
+    }
+    await saveSpec(config, notionUrl, nextSpec);
+  }
+
+  printCollectReports(reports, apply);
+
+  if (!apply) {
+    console.log("Dry run only. Rerun with --apply to copy these files into the main checkout.");
+    if (overlaps.length) {
+      console.log("Overlapping changed files detected:");
+      for (const overlap of overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
+    }
+  }
+}
+
+async function cleanup(flags) {
+  const config = await loadConfig();
+  const notionUrl = requireFlag(flags, "ntn");
+  const spec = await loadSpec(config, notionUrl);
+  if (!spec) throw new Error("No local spec found. Run plan first.");
+
+  const apply = flags.apply === true || flags.apply === "true";
+  const force = flags.force === true || flags.force === "true";
+  const deleteBranches = flags.branches === true || flags.branches === "true";
+  const taskFilter = optionalString(flags, "task", undefined);
+  const gitRoot = await resolveGitRoot(spec.project);
+  const targets = cleanupTargets(spec, taskFilter);
+
+  if (!targets.length) {
+    console.log("No recorded swarm worktrees found to clean up.");
+    return;
+  }
+
+  for (const target of targets) {
+    console.log(`${apply ? "removing" : "would remove"} ${target.taskId} worktree ${target.worktree}`);
+    if (apply && (await pathExists(target.worktree))) {
+      await removeWorktree(gitRoot, target.worktree, force);
+    }
+    if (deleteBranches && target.branch) {
+      console.log(`${apply ? "deleting" : "would delete"} ${target.branch}`);
+      if (apply) await deleteBranch(gitRoot, target.branch, force);
+    }
+  }
+
+  if (!apply) {
+    console.log("Dry run only. Rerun with --apply to remove worktrees.");
+    if (deleteBranches) console.log("Branch deletion was requested and will also require --apply.");
+  }
+}
+
+function cleanupTargets(spec, taskFilter) {
+  return (spec.tasks || [])
+    .filter((task) => !taskFilter || task.id === taskFilter)
+    .map((task) => ({
+      taskId: task.id,
+      worktree: task.lastResult?.worktree,
+      branch: task.lastResult?.branch
+    }))
+    .filter((target) => target.worktree);
+}
+
+async function removeWorktree(gitRoot, worktree, force) {
+  const args = ["-C", gitRoot, "worktree", "remove"];
+  if (force) args.push("--force");
+  args.push(worktree);
+  await git(args);
+}
+
+async function deleteBranch(gitRoot, branch, force) {
+  await git(["-C", gitRoot, "branch", force ? "-D" : "-d", branch]);
+}
+
+async function inspectCollectTask(task) {
+  const worktree = task.lastResult.worktree;
+  if (!(await pathExists(worktree))) {
+    throw new Error(`Worktree for ${task.id} does not exist: ${worktree}`);
+  }
+  const changedFiles = await worktreeChangedFiles(worktree);
+  for (const file of changedFiles) {
+    if (isUnsafeRelativePath(file)) {
+      throw new Error(`Refusing to collect unsafe path from ${task.id}: ${file}`);
+    }
+  }
+  return { task, worktree, changedFiles };
+}
+
+async function applyCollectReport({ report, projectRoot }) {
+  for (const file of report.changedFiles) {
+    await cp(path.join(report.worktree, file), path.join(projectRoot, file), { recursive: true });
+  }
+}
+
+function printCollectReports(reports, apply) {
+  for (const report of reports) {
+    console.log(`${report.task.id} ${report.changedFiles.length} changed file${report.changedFiles.length === 1 ? "" : "s"} from ${report.worktree}`);
+    for (const file of report.changedFiles) console.log(`  ${apply ? "applied" : "would apply"} ${file}`);
+  }
+}
+
+function overlappingChangedFiles(reports) {
+  const byFile = new Map();
+  for (const report of reports) {
+    for (const file of report.changedFiles) {
+      const taskIds = byFile.get(file) || [];
+      taskIds.push(report.task.id);
+      byFile.set(file, taskIds);
+    }
+  }
+  return [...byFile.entries()]
+    .filter(([, taskIds]) => taskIds.length > 1)
+    .map(([file, taskIds]) => ({ file, taskIds }));
+}
+
+async function worktreeChangedFiles(worktree) {
+  const output = await git(["-C", worktree, "status", "--short"]);
+  return output
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => line.slice(3).split(" -> ").pop())
+    .filter(Boolean);
+}
+
+function isUnsafeRelativePath(filePath) {
+  return path.isAbsolute(filePath) || filePath.split(/[\\/]/).includes("..");
 }
 
 async function syncToDataSources(config, notionUrl, spec) {

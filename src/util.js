@@ -126,6 +126,8 @@ Commands:
   status --ntn <notion-url>
   sync   --ntn <notion-url> [--mode data-source|blocks]
   compact --ntn <notion-url> [--keep-runs 1]
+  collect --ntn <notion-url> [--task task-003] [--apply] [--force]
+  cleanup --ntn <notion-url> [--task task-003] [--apply] [--force] [--branches]
   inspect --ntn <notion-url>
   stop   --ntn <notion-url>
   review --ntn <notion-url> --type pr_readiness

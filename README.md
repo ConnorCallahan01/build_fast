@@ -28,6 +28,8 @@ node bin/build_fast.js swarm --ntn "<notion-url>" --concurrency 2 --max-tasks 2
 node bin/build_fast.js status --ntn "<notion-url>"
 node bin/build_fast.js sync --ntn "<notion-url>" [--mode data-source|blocks]
 node bin/build_fast.js compact --ntn "<notion-url>" [--keep-runs 1]
+node bin/build_fast.js collect --ntn "<notion-url>" [--task task-003] [--apply] [--force]
+node bin/build_fast.js cleanup --ntn "<notion-url>" [--task task-003] [--apply] [--force] [--branches]
 node bin/build_fast.js inspect --ntn "<notion-url>"
 node bin/build_fast.js stop --ntn "<notion-url>"
 node bin/build_fast.js review --ntn "<notion-url>" --type pr_readiness
@@ -59,6 +61,8 @@ The Notion page passed via `--ntn` must be shared with the integration. Without 
 - `swarm` can run dependency-ready pending tasks in separate git worktrees, but merge/PR automation is not implemented yet.
 - Swarm worktrees are created under the OS temp directory and their paths are recorded in task state.
 - Swarm requires the target repository to have at least one commit because git worktrees cannot be created from an unborn `HEAD`.
+- `collect` reports completed task worktree changes by default; `--apply` copies those changed files into the main checkout. If multiple tasks changed the same file, apply requires `--task <id>` or `--force`.
+- `cleanup` reports recorded swarm worktrees by default; `--apply` removes them, and `--branches` also deletes task branches.
 - Notion data-source mapping currently expects `Specs` and `Spec Tasks` data sources with the MVP property names.
 - Claude Code is the only worker adapter implemented.
 - TypeScript is deferred until package tooling is installed.

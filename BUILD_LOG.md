@@ -269,3 +269,54 @@ Updated `swarm` to fail with a clear setup error when:
 Also changed the CLI wrapper to print concise error messages by default. Full stacks are still available with `BUILD_FAST_DEBUG=1`.
 
 The next live test should create an initial commit before rerunning swarm.
+
+### Step 19: Worktree Collection
+
+The first full swarm run completed all three Moon Pantry tasks, but task changes stayed isolated in their worktrees. Task 003 independently reimplemented task 001/002 behavior because earlier task worktrees were not merged into its base.
+
+Added `collect`:
+
+- Default mode reports changed files from completed worktree-backed tasks.
+- `--task <id>` scopes collection to one task.
+- `--apply` copies changed files from the task worktree into the main checkout.
+- Paths are checked before copying so absolute paths or `..` traversal are refused.
+
+This gives the user a manual integration step before we build smarter merge/conflict automation.
+
+Fixed a dry-run parsing bug where trimming `git status --short` output before removing the two status columns dropped the first character from file paths.
+
+After applying task 003 with `collect --apply`, the Moon Pantry fixture passed `npm test` from the main checkout. This verifies the loop from spec creation through Notion sync, swarm execution, collection, and target-project feedback.
+
+Collection now records `collectedAt` and `collectedFiles` on applied tasks, and `status` displays `[collected]` for those tasks.
+
+### Step 20: Collection Overlap Guard
+
+Made `collect` safer for parallel worktree output:
+
+- Dry runs now report overlapping changed files across completed task worktrees.
+- `collect --apply` refuses to apply multiple tasks when they changed the same file.
+- Users can choose a single task with `--task <id>` or explicitly apply all in task order with `--force`.
+
+This prevents accidental last-writer-wins collection when parallel agents touched the same file.
+
+### Step 21: Dependency-Aware Swarm Bases
+
+Updated `swarm` so dependent tasks can start with completed dependency output:
+
+- When a task has completed dependencies, `swarm` copies changed files from each dependency worktree into the new task worktree before Claude starts.
+- The copied dependency files are recorded in task metadata as `dependencyOverlays`.
+- This avoids the earlier behavior where task 003 had to reimplement task 001/002 because its worktree started from the original `HEAD`.
+
+This is still file-overlay based, not a full merge engine. Overlap handling remains part of `collect`.
+
+### Step 22: Worktree Cleanup
+
+Added `cleanup`:
+
+- Dry-run by default, listing recorded swarm worktrees.
+- `--apply` removes worktrees.
+- `--task <id>` scopes cleanup to one task.
+- `--force` passes through to `git worktree remove --force`.
+- `--branches` also deletes task branches when combined with `--apply`.
+
+This gives each big run a way to reset local swarm artifacts.
