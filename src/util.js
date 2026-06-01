@@ -121,6 +121,7 @@ Commands:
          [--no-agent for deterministic local planning]
   tasks  --ntn <notion-url> [regenerates from an existing local spec]
   start  --goal "..." --ntn <notion-url> --project <dir> --type <type> --autopilot junior_mode
+  drive  --ntn <notion-url> [--goal "..."] [--project <dir>] [--type <type>]
   run    --ntn <notion-url> [--autopilot intern_mode|junior_mode|boss_mode]
   swarm  --ntn <notion-url> [--concurrency 2] [--max-tasks 2]
   status --ntn <notion-url>

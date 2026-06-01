@@ -22,6 +22,7 @@ Locally, `build_fast` keys state by the parsed Notion page ID. Different Notion 
 ```bash
 node bin/build_fast.js doctor
 node bin/build_fast.js plan --goal "..." --ntn "<notion-url>" --project ./repo --type feature
+node bin/build_fast.js drive --goal "..." --ntn "<notion-url>" --project ./repo --type feature --autopilot junior_mode
 node bin/build_fast.js start --goal "..." --ntn "<notion-url>" --project ./repo --type feature --autopilot junior_mode
 node bin/build_fast.js run --ntn "<notion-url>" --autopilot boss_mode
 node bin/build_fast.js swarm --ntn "<notion-url>" --concurrency 2 --max-tasks 2
@@ -63,6 +64,8 @@ The Notion page passed via `--ntn` must be shared with the integration. Without 
 - Swarm requires the target repository to have at least one commit because git worktrees cannot be created from an unborn `HEAD`.
 - `collect` reports completed task worktree changes by default; `--apply` copies those changed files into the main checkout. If multiple tasks changed the same file, apply requires `--task <id>` or `--force`.
 - When overlapping task outputs exist, `collect` recommends the latest dependency-chain task that contains every overlapped file.
+- `plan` performs a deterministic repo scan first and feeds project scripts, files, README, git state, and likely feedback loops into the planning prompt.
+- `drive` runs the loop end to end: plan if needed, sync, swarm until complete, collect the recommended integration task, run feedback checks, and sync again.
 - `cleanup` reports recorded swarm worktrees by default; `--apply` removes them, and `--branches` also deletes task branches.
 - Notion data-source mapping currently expects `Specs` and `Spec Tasks` data sources with the MVP property names.
 - Claude Code is the only worker adapter implemented.

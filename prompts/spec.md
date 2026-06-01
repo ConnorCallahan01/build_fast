@@ -12,7 +12,10 @@ Project directory:
 Notion:
 {{notionUrl}}
 
-Inspect the repository enough to create a useful implementation plan. Return only JSON with this shape:
+Repository first-pass context:
+{{repoContext}}
+
+Use the repository context to create a useful implementation plan. Return only JSON with this shape:
 
 {
   "title": "short spec title",
@@ -37,5 +40,7 @@ Planning rules:
 - Make tasks small enough for one fresh Claude Code invocation.
 - Prefer risky/foundational tasks early.
 - Include feedback loops that prove done.
+- Use the detected project scripts and files instead of generic test instructions.
+- Include dependencies when later tasks need earlier task output.
+- Avoid creating tasks that only restate the goal without codebase-specific guidance.
 - Do not write code during planning.
-

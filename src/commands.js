@@ -8,6 +8,7 @@ import { runClaude } from "./claude.js";
 import { makeSpec, loadSpec, saveSpec, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage } from "./ledger.js";
 import { checkNotionPage, inspectNotionPage, markdownBlocks, NotionClient, parseNotionId, pageTitle, notionRelation, notionRichText, notionStatus, notionTitle, notionUrl } from "./notion.js";
 import { renderPrompt } from "./prompts.js";
+import { scanRepo } from "./repo-scan.js";
 import { normalizeProject, nowIso, optionalString, pathExists, printHelp, readJson, requireFlag, writeJson } from "./util.js";
 
 const execFileAsync = promisify(execFile);
@@ -22,6 +23,8 @@ export async function dispatch(command, flags) {
     case "start":
       await plan({ ...flags, skipIfExists: true });
       return run(flags);
+    case "drive":
+      return drive(flags);
     case "run":
     case "go":
       return run(flags);
@@ -91,11 +94,13 @@ async function plan(flags) {
   }
 
   let generated;
+  const repoContext = await scanRepo(project);
   if (flags["no-agent"]) {
-    generated = normalizePlan(null, goal);
+    generated = normalizePlan(null, goal, repoContext);
   } else {
-    const prompt = await renderPrompt("spec.md", { goal, type, project, notionUrl });
+    const prompt = await renderPrompt("spec.md", { goal, type, project, notionUrl, repoContext });
     const runDir = path.join(process.cwd(), ".build_fast", "planning", `${Date.now()}`);
+    await writeJson(path.join(runDir, "repo-context.json"), repoContext);
     const result = await runClaude({
       config,
       prompt,
@@ -104,9 +109,15 @@ async function plan(flags) {
       autopilot: "intern_mode",
       permissionProfile: "inherit"
     });
-    generated = normalizePlan(result.parsed, goal);
+    generated = normalizePlan(result.parsed, goal, repoContext);
   }
   const spec = makeSpec({ goal, type, project, notionUrl, plan: generated });
+  spec.repoContext = {
+    gitRoot: repoContext.gitRoot,
+    projectRelativePath: repoContext.projectRelativePath,
+    feedbackLoops: repoContext.detected.feedbackLoops,
+    scannedAt: nowIso()
+  };
   await saveSpec(config, notionUrl, spec);
 
   await writeToNotion(config, notionUrl, formatSpecMarkdown(spec), { label: "spec" });
@@ -115,14 +126,15 @@ async function plan(flags) {
   console.log(`Local spec: .build_fast/specs/${spec.id}/spec.json`);
 }
 
-function normalizePlan(parsed, goal) {
+function normalizePlan(parsed, goal, repoContext = undefined) {
   const source = parsed?.structured_output || parsed;
   if (source?.tasks?.length) return source;
+  const feedbackLoops = repoContext?.detected?.feedbackLoops?.length ? repoContext.detected.feedbackLoops : ["Run the project's relevant test, lint, or build command."];
   return {
     title: goal.slice(0, 80),
     overview: source?.summary || `Implement: ${goal}`,
     risks: [],
-    feedbackLoops: [],
+    feedbackLoops,
     tasks: [
       {
         id: "task-001",
@@ -130,7 +142,7 @@ function normalizePlan(parsed, goal) {
         objective: goal,
         instructions: "Inspect the codebase, make the smallest coherent implementation, and keep changes scoped to the goal.",
         acceptanceCriteria: ["The requested behavior is implemented.", "Relevant tests or checks pass."],
-        testPlan: ["Run the project's relevant test, lint, or build command."],
+        testPlan: feedbackLoops,
         risk: "medium",
         dependencies: []
       }
@@ -191,6 +203,125 @@ async function run(flags) {
       return;
     }
   }
+}
+
+async function drive(flags) {
+  const notionUrl = requireFlag(flags, "ntn");
+  const autopilot = optionalString(flags, "autopilot", "junior_mode");
+  const permissionProfile = optionalString(flags, "permission-profile", "managed");
+  const concurrency = optionalString(flags, "concurrency", "2");
+  const maxTasks = optionalString(flags, "max-tasks", concurrency);
+
+  let config = await ensureConfig();
+  let spec = await loadSpec(config, notionUrl);
+  if (!spec) {
+    if (!flags.goal) throw new Error("No local spec found. Pass --goal, --project, and --type or run plan first.");
+    await plan(flags);
+    config = await loadConfig();
+    spec = await loadSpec(config, notionUrl);
+  }
+
+  await sync({ ntn: notionUrl });
+
+  let iterations = 0;
+  const maxIterations = Math.max(1, Number(optionalString(flags, "max-iterations", "20")));
+  while (iterations < maxIterations) {
+    spec = await loadSpec(config, notionUrl);
+    const pending = readyPendingTasks(spec);
+    if (!pending.length) break;
+    await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks });
+    iterations += 1;
+  }
+
+  spec = await loadSpec(config, notionUrl);
+  if (readyPendingTasks(spec).length) {
+    throw new Error(`Drive stopped after ${maxIterations} swarm iterations with pending tasks remaining.`);
+  }
+
+  const collection = await collectSummary(config, notionUrl, spec, undefined, { uncollectedOnly: true, skipMissing: true });
+  if (collection.reports.length) {
+    printCollectReports(collection.reports, false);
+    if (collection.overlaps.length) {
+      console.log("Overlapping changed files detected:");
+      for (const overlap of collection.overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
+    }
+
+    const shouldApply = shouldDriveApply(autopilot, collection);
+    if (shouldApply.apply) {
+      await collect({ ntn: notionUrl, task: shouldApply.taskId, apply: true });
+    } else {
+      console.log(`Drive stopped before collection apply: ${shouldApply.reason}`);
+      return;
+    }
+  } else {
+    console.log("No uncollected worktree output found. Continuing to feedback checks.");
+  }
+
+  const refreshed = await loadSpec(config, notionUrl);
+  const checks = await runFeedbackLoops(refreshed);
+  for (const check of checks) {
+    console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
+  }
+  if (checks.some((check) => !check.ok)) {
+    throw new Error("Drive feedback checks failed.");
+  }
+
+  await sync({ ntn: notionUrl });
+  console.log("Drive complete.");
+}
+
+function shouldDriveApply(autopilot, collection) {
+  if (!collection.reports.length) return { apply: false, reason: "no completed worktree-backed tasks found" };
+  if (autopilot === "intern_mode") return { apply: false, reason: "intern_mode requires manual collection apply" };
+  if (!collection.overlaps.length) {
+    const latest = [...collection.reports].sort((a, b) => (b.task.order || 0) - (a.task.order || 0))[0];
+    return { apply: true, taskId: latest.task.id };
+  }
+  if (collection.recommendation && (autopilot === "junior_mode" || autopilot === "boss_mode")) {
+    return { apply: true, taskId: collection.recommendation.task.id };
+  }
+  return { apply: false, reason: "overlapping task outputs need manual choice" };
+}
+
+async function runFeedbackLoops(spec) {
+  const repoContext = await scanRepo(spec.project);
+  const commands = [...new Set([...(spec.feedbackLoops || []), ...(spec.repoContext?.feedbackLoops || []), ...(repoContext.detected.feedbackLoops || [])])]
+    .map(normalizeFeedbackCommand)
+    .filter(Boolean)
+    .filter((command) => !command.toLowerCase().includes("manual"))
+    .slice(0, 5);
+  const selected = commands.length ? commands : ["npm test"];
+  const results = [];
+  for (const command of selected) {
+    results.push(await runFeedbackCommand(spec.project, command));
+  }
+  return results;
+}
+
+async function runFeedbackCommand(projectDir, command) {
+  try {
+    const { stdout, stderr } = await execFileAsync("/bin/zsh", ["-lc", command], {
+      cwd: projectDir,
+      timeout: 120000,
+      maxBuffer: 1024 * 1024
+    });
+    return { command, ok: true, detail: firstOutputLine(stdout || stderr || "passed") };
+  } catch (error) {
+    return { command, ok: false, detail: firstOutputLine(error.stdout || error.stderr || error.message) };
+  }
+}
+
+function firstOutputLine(value) {
+  return String(value || "").trim().split("\n").filter(Boolean).at(-1) || "no output";
+}
+
+function normalizeFeedbackCommand(command) {
+  const value = String(command || "").trim();
+  if (!value) return "";
+  return value
+    .replace(/\s+\([^)]*\)\s*$/s, "")
+    .replace(/\s+-\s+.*$/s, "")
+    .trim();
 }
 
 async function swarm(flags) {
@@ -557,19 +688,13 @@ async function collect(flags) {
   const force = flags.force === true || flags.force === "true";
   const taskFilter = optionalString(flags, "task", undefined);
   const projectRoot = await resolveGitRoot(spec.project);
-  const tasks = (spec.tasks || [])
-    .filter((task) => task.status === "completed")
-    .filter((task) => !taskFilter || task.id === taskFilter)
-    .filter((task) => task.lastResult?.worktree);
+  const { reports, overlaps, recommendation } = await collectSummary(config, notionUrl, spec, taskFilter);
 
-  if (!tasks.length) {
+  if (!reports.length) {
     console.log("No completed worktree-backed tasks found to collect.");
     return;
   }
 
-  const reports = await Promise.all(tasks.map((task) => inspectCollectTask(task)));
-  const overlaps = overlappingChangedFiles(reports);
-  const recommendation = collectRecommendation(reports, overlaps);
   if (apply && overlaps.length && !taskFilter && !force) {
     printCollectReports(reports, false);
     throw new Error(
@@ -608,6 +733,25 @@ async function collect(flags) {
       }
     }
   }
+}
+
+async function collectSummary(config, notionUrl, spec, taskFilter = undefined, options = {}) {
+  const tasks = (spec.tasks || [])
+    .filter((task) => task.status === "completed")
+    .filter((task) => !taskFilter || task.id === taskFilter)
+    .filter((task) => !options.uncollectedOnly || !task.collectedAt)
+    .filter((task) => task.lastResult?.worktree);
+  const reports = [];
+  for (const task of tasks) {
+    if (options.skipMissing && !(await pathExists(task.lastResult.worktree))) continue;
+    reports.push(await inspectCollectTask(task));
+  }
+  const overlaps = overlappingChangedFiles(reports);
+  return {
+    reports,
+    overlaps,
+    recommendation: collectRecommendation(reports, overlaps)
+  };
 }
 
 async function cleanup(flags) {
@@ -672,6 +816,8 @@ async function pruneWorktrees(gitRoot) {
 }
 
 async function deleteBranch(gitRoot, branch, force) {
+  const existing = (await git(["-C", gitRoot, "branch", "--list", branch])).trim();
+  if (!existing) return;
   await git(["-C", gitRoot, "branch", force ? "-D" : "-d", branch]);
 }
 

@@ -331,3 +331,30 @@ Added a collection recommendation:
 - Refused multi-task `collect --apply` includes the recommended `--task <id> --apply` command.
 
 For the Moon Pantry recommendation/category run, this should recommend task 005.
+
+### Step 24: Repo-Aware Planning
+
+Added a deterministic repository scan before planning:
+
+- Captures git root, branch, head, and short status.
+- Reads package scripts and README content.
+- Lists tracked project files.
+- Detects likely runtimes, source directories, test directories, and feedback loops.
+- Feeds this context into the spec planning prompt.
+- Stores a compact repo context summary on the local spec.
+
+This should make generated plans more codebase-specific and improve task ordering/test quality.
+
+### Step 25: Drive Command
+
+Added `drive` as the first end-to-end runner:
+
+- Plans if no local spec exists and `--goal` is provided.
+- Syncs to Notion.
+- Runs `swarm` until no dependency-ready pending tasks remain.
+- Uses `collect` recommendation logic to choose the integration task.
+- Applies automatically for `junior_mode` and `boss_mode`; `intern_mode` stops before apply.
+- Runs repo feedback loops after collection.
+- Syncs to Notion again when checks pass.
+
+Also made cleanup tolerate already-deleted task branches so repeated cleanup runs are less brittle.
