@@ -140,7 +140,8 @@ async function confirmGoalContract(contract, flags) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     while (true) {
-      const answer = (await rl.question("\nApprove goal contract? [a]pprove, [e]dit, [q]uit: ")).trim().toLowerCase();
+      printGoalActions();
+      const answer = (await rl.question("Choose an action [a/e/q]: ")).trim().toLowerCase();
       if (!answer || answer === "a" || answer === "approve" || answer === "y" || answer === "yes") {
         return { ...contract, approvedAt: nowIso() };
       }
@@ -157,32 +158,62 @@ async function confirmGoalContract(contract, flags) {
   }
 }
 
+function printGoalActions() {
+  console.log("\nGoal contract actions:");
+  console.log("  a  approve and save");
+  console.log("  e  edit/refine");
+  console.log("  q  quit without saving");
+}
+
 function shouldPrompt(flags) {
   if (flags.yes || flags.y || flags["non-interactive"] || flags["no-interactive"]) return false;
+  if (flags.interactive) return true;
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
 async function editGoalContract(rl, contract) {
-  const finalGoal = await askOptional(rl, "Final goal", contract.finalGoal);
-  const targetNote = await askOptional(rl, "Add target change note", "");
-  const acceptanceNote = await askOptional(rl, "Add acceptance criterion", "");
-  const outOfScopeNote = await askOptional(rl, "Add out-of-scope note", "");
-  const assumptionNote = await askOptional(rl, "Add assumption", "");
-  return {
-    ...contract,
-    finalGoal,
-    targetChanges: appendIfPresent(contract.targetChanges, targetNote),
-    acceptanceCriteria: appendIfPresent(contract.acceptanceCriteria, acceptanceNote),
-    outOfScope: appendIfPresent(contract.outOfScope, outOfScopeNote),
-    assumptions: appendIfPresent(contract.assumptions, assumptionNote),
-    revisedAt: nowIso()
-  };
+  let next = contract;
+  while (true) {
+    printEditActions();
+    const action = (await rl.question("Choose edit [1-6]: ")).trim().toLowerCase();
+    if (!action || action === "6" || action === "d" || action === "done") return { ...next, revisedAt: nowIso() };
+    if (action === "1") {
+      const note = await askRequired(rl, "Refinement to add to final goal");
+      next = {
+        ...next,
+        finalGoal: `${next.finalGoal} Additional requirement: ${note}`,
+        targetChanges: appendIfPresent(next.targetChanges, note)
+      };
+    } else if (action === "2") {
+      next = { ...next, finalGoal: await askRequired(rl, "Rewrite final goal") };
+    } else if (action === "3") {
+      next = { ...next, targetChanges: appendIfPresent(next.targetChanges, await askRequired(rl, "Target change to add")) };
+    } else if (action === "4") {
+      next = { ...next, acceptanceCriteria: appendIfPresent(next.acceptanceCriteria, await askRequired(rl, "Acceptance criterion to add")) };
+    } else if (action === "5") {
+      next = { ...next, outOfScope: appendIfPresent(next.outOfScope, await askRequired(rl, "Out-of-scope note to add")) };
+    } else {
+      console.log("Choose 1, 2, 3, 4, 5, or 6.");
+    }
+  }
 }
 
-async function askOptional(rl, label, current) {
-  const suffix = current ? ` [${current}]` : "";
-  const answer = await rl.question(`${label}${suffix}: `);
-  return answer.trim() || current;
+function printEditActions() {
+  console.log("\nEdit goal contract:");
+  console.log("  1  add refinement to final goal");
+  console.log("  2  rewrite final goal");
+  console.log("  3  add target change");
+  console.log("  4  add acceptance criterion");
+  console.log("  5  add out-of-scope note");
+  console.log("  6  done editing");
+}
+
+async function askRequired(rl, label) {
+  while (true) {
+    const answer = (await rl.question(`${label}: `)).trim();
+    if (answer) return answer;
+    console.log("Enter a value, or choose done from the edit menu.");
+  }
 }
 
 function appendIfPresent(items = [], value) {

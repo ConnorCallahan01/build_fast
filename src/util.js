@@ -117,7 +117,7 @@ export function printHelp() {
 
 Commands:
   doctor
-  goal   --goal "..." --ntn <notion-url> --project <dir> --type <type> [--yes]
+  goal   --goal "..." --ntn <notion-url> --project <dir> --type <type> [--yes|--interactive]
   plan   --goal "..." --ntn <notion-url> --project <dir> --type <type>
          [--no-agent for deterministic local planning]
   tasks  --ntn <notion-url> [regenerates from an existing local spec]

@@ -21,7 +21,7 @@ Locally, `build_fast` keys state by the parsed Notion page ID. Different Notion 
 
 ```bash
 node bin/build_fast.js doctor
-node bin/build_fast.js goal --goal "..." --ntn "<notion-url>" --project ./repo --type feature [--yes]
+node bin/build_fast.js goal --goal "..." --ntn "<notion-url>" --project ./repo --type feature [--yes|--interactive]
 node bin/build_fast.js plan --goal "..." --ntn "<notion-url>" --project ./repo --type feature
 node bin/build_fast.js drive --goal "..." --ntn "<notion-url>" --project ./repo --type feature --autopilot junior_mode
 node bin/build_fast.js drive --ntn "<notion-url>" --from-goal --autopilot junior_mode

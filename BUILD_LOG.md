@@ -392,6 +392,14 @@ Updated the goal stage to be interactive in TTY terminals:
 
 This makes the goal contract an explicit user-confirmed checkpoint before `drive --from-goal`.
 
+Refined the interactive edit UX after testing:
+
+- The approval prompt now shows clear actions before asking for input.
+- Edit mode is a numbered menu instead of a sequence of ambiguous fields.
+- Adding a refinement preserves the drafted final goal and appends the new requirement, instead of accidentally replacing the whole goal.
+- Full final-goal rewrite is still available as an explicit separate action.
+- `--interactive` can force the prompt flow for test harnesses or piped input; `--yes` remains the non-interactive approval path.
+
 ### Step 28: Status Dashboard
 
 Expanded `status` from a task list into a lightweight dashboard:
