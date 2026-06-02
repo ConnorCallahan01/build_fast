@@ -140,6 +140,7 @@ Commands:
   review --ntn <notion-url> --type pr_readiness [--create-tasks]
   qa     --ntn <notion-url> --type browser [--create-task]
   qa-setup [--project <dir> | --ntn <notion-url>] [--install] [--package-manager npm|pnpm|yarn|bun]
+  user-test [--ntn <notion-url>] [--run-setup] [--create-tasks] [--keep-running]
   bugs   --ntn <notion-url> [--create-tasks]
   ship   --ntn <notion-url> [--branch build-fast/name] [--apply] [--pr]
   workers [--worker claude]

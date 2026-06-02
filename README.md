@@ -124,6 +124,7 @@ build_fast cleanup --ntn "$NTN" --apply --force --branches
 | `review` | Run a Claude-backed review prompt |
 | `qa` | Run structured QA checks, currently browser demo checks |
 | `qa-setup` | Check or install Playwright browser QA dependencies in a target project |
+| `user-test` | Walk through a human acceptance checklist after `go`/QA, with optional follow-up tasks |
 | `bugs` | Inspect logged QA/feedback bugs or convert them into fix tasks |
 | `stop` | Mark active workers stopped in local state |
 | `ship` | Preview or apply guarded branch/commit/push/PR handoff |
@@ -179,6 +180,26 @@ build_fast drive --ntn "$NTN" --qa browser
 ```
 
 If final QA fails, `drive` logs bugs, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode`, `drive` automatically runs one QA repair pass by default, applies the fix output when safe, reruns QA, and then stops only if failures remain. Use `--max-qa-repairs 0` to only create bug tasks, or increase the limit for more retry cycles.
+
+## Human User Test Pass
+
+Automated QA checks whether the app loads and key behavior still works. `user-test` is the human acceptance layer after `go`:
+
+```bash
+build_fast user-test
+```
+
+It uses the Notion/project defaults saved by `init`, shows setup commands and URLs from the active spec/program, walks through a checklist, and writes a local artifact under `.build_fast/specs/<target>/user-tests/`.
+
+Useful options:
+
+```bash
+build_fast user-test --run-setup
+build_fast user-test --create-tasks
+build_fast user-test --keep-running
+```
+
+Use `--create-tasks` when a check fails or needs tweaks; build_fast appends `[user-test]` follow-up tasks to the active spec/program so the next `go` can repair them.
 
 Specs can define a browser QA profile so the checks are project-specific instead of Orbit-specific:
 

@@ -7,12 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig, ensureConfig, saveConfigPatch } from "./config.js";
 import { runClaude } from "./claude.js";
-import { makeSpec, loadSpec, saveSpec, specDir, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage, isMultiSpecType, makeProgram, loadProgram, saveProgram, readyProgramSpecs, programToStandaloneSpec, updateProgramSpec } from "./ledger.js";
+import { makeSpec, loadSpec, saveSpec, specDir, ledgerRoot, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage, isMultiSpecType, makeProgram, loadProgram, saveProgram, readyProgramSpecs, programToStandaloneSpec, updateProgramSpec } from "./ledger.js";
 import { checkNotionPage, inspectNotionPage, markdownBlocks, NotionClient, parseNotionId, pageTitle, notionRelation, notionRichText, notionStatus, notionTitle, notionUrl } from "./notion.js";
 import { renderPrompt } from "./prompts.js";
 import { scanRepo } from "./repo-scan.js";
 import * as term from "./terminal.js";
-import { normalizeProject, nowIso, optionalString, pathExists, printHelp, readJson, requireFlag, writeJson } from "./util.js";
+import { ensureDir, newId, normalizeProject, nowIso, optionalString, pathExists, printHelp, readJson, requireFlag, writeJson } from "./util.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +59,9 @@ export async function dispatch(command, flags) {
       return qa(flags);
     case "qa-setup":
       return qaSetup(flags);
+    case "user-test":
+    case "userTest":
+      return userTest(flags);
     case "bugs":
       return bugs(flags);
     case "ship":
@@ -708,6 +711,14 @@ async function plan(flags) {
     scannedAt: nowIso()
   };
   await saveSpec(config, notionUrl, spec);
+  await saveCurrentContext(config, {
+    notionUrl,
+    mode: "spec",
+    targetId: spec.id,
+    title: spec.title,
+    project: spec.project,
+    lastCommand: "plan"
+  });
 
   await writeToNotion(config, notionUrl, formatSpecMarkdown(spec), { label: "spec" });
 
@@ -750,6 +761,14 @@ async function planProgram({ config, notionUrl, type, project, flags }) {
 
   const program = makeProgram({ goal, type, project, notionUrl, plan: generated });
   await saveProgram(config, notionUrl, program);
+  await saveCurrentContext(config, {
+    notionUrl,
+    mode: "program",
+    targetId: program.id,
+    title: program.title,
+    project: program.project,
+    lastCommand: "program"
+  });
 
   term.line(`Planned ${program.specs.length} specs for: ${program.title}`);
   for (const spec of program.specs) {
@@ -912,6 +931,15 @@ async function drive(flags) {
     return;
   }
 
+  await saveCurrentContext(config, {
+    notionUrl,
+    mode: "spec",
+    targetId: spec.id,
+    title: spec.title,
+    project: spec.project,
+    lastCommand: "drive"
+  });
+
   enforcePlanQuality(spec, flags);
   await term.timed("Syncing Notion spec state", () => sync({ ntn: notionUrl }));
   if (flags["no-agent"]) {
@@ -1013,6 +1041,15 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
     await printDriveDryRun({ target: program, flags, autopilot, permissionProfile, concurrency, maxTasks, parallel: optionalString(flags, "parallel", "default") });
     return;
   }
+
+  await saveCurrentContext(config, {
+    notionUrl,
+    mode: "program",
+    targetId: program.id,
+    title: program.title,
+    project: program.project,
+    lastCommand: "drive"
+  });
 
   enforcePlanQuality(program, flags);
   const completedAtStart = programComplete(program);
@@ -2214,6 +2251,299 @@ async function status(flags) {
     term.section("Active workers");
     for (const worker of workers) term.line(`${worker.runId} ${worker.taskId} ${worker.status}`);
   }
+}
+
+async function userTest(flags = {}) {
+  const config = await ensureConfig();
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
+  const program = await loadProgram(config, notionUrl);
+  const spec = program ? undefined : await loadSpec(config, notionUrl);
+  const target = program || spec;
+  if (!target) throw new Error("No local spec or program found. Run `build_fast plan` first.");
+
+  const profile = buildUserTestProfile(target, flags);
+  const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
+  const autoPass = flags.yes === true || flags.yes === "true";
+  const createTasks = flags["create-tasks"] === true || flags["create-tasks"] === "true" || flags["create-task"] === true || flags["create-task"] === "true";
+
+  term.section("User Test");
+  term.keyValue("Target", `${target.title} [${target.status || "planned"}]`);
+  term.keyValue("Mode", program ? "program" : "spec");
+  term.keyValue("Project", target.project || process.cwd());
+  if (profile.urls.length) printStatusList("Open", profile.urls);
+  if (profile.setup.length) printStatusList("Setup", profile.setup.map((step) => step.command || step.label || step.url).filter(Boolean));
+  printStatusList("Checklist", profile.checks);
+
+  if (dryRun) {
+    term.info("Dry run", "no setup commands, checklist prompts, artifacts, or tasks were created");
+    return;
+  }
+
+  const run = {
+    id: newId("ut"),
+    status: "running",
+    mode: program ? "program" : "spec",
+    targetId: target.id,
+    title: target.title,
+    project: target.project || process.cwd(),
+    notionUrl,
+    startedAt: nowIso(),
+    completedAt: null,
+    profile,
+    setup: [],
+    answers: [],
+    followUpTasks: []
+  };
+
+  const startedProcesses = [];
+  try {
+    if (flags["run-setup"] === true || flags["run-setup"] === "true") {
+      run.setup = await runUserTestSetup(profile, target.project || process.cwd(), startedProcesses);
+    } else if (profile.setup.length) {
+      term.warn("Setup not started", "rerun with --run-setup to start configured commands");
+    }
+
+    const scriptedAnswers = scriptedUserTestAnswers(profile.checks, flags);
+    run.answers = scriptedAnswers || (autoPass
+      ? profile.checks.map((check, index) => ({ id: `check-${String(index + 1).padStart(3, "0")}`, check, result: "pass", note: "" }))
+      : await promptUserTestChecklist(profile.checks));
+
+    run.status = userTestStatus(run.answers);
+    run.completedAt = nowIso();
+
+    if (createTasks) {
+      const created = await createUserTestFollowUpTasks({ config, notionUrl, target, program, answers: run.answers });
+      run.followUpTasks = created.map((task) => ({ id: task.id, title: task.title, specId: task.specId || target.id }));
+      if (created.length) term.success("Created follow-up tasks", `${created.length}`);
+    }
+
+    const artifactPath = await saveUserTestRun(config, notionUrl, run);
+    term.section("User Test Result");
+    term.keyValue("Result", run.status);
+    term.keyValue("Artifact", artifactPath);
+    const actionable = run.answers.filter((answer) => answer.result === "fail" || answer.result === "tweak");
+    if (actionable.length) {
+      printStatusList("Follow up", actionable.map((answer) => `${answer.result}: ${answer.check}${answer.note ? ` — ${answer.note}` : ""}`));
+      if (!createTasks) term.info("Next", "rerun with --create-tasks to add follow-up work to the active spec/program");
+    }
+  } finally {
+    if (!(flags["keep-running"] === true || flags["keep-running"] === "true")) {
+      for (const child of startedProcesses) child.kill("SIGTERM");
+    }
+  }
+}
+
+async function resolveDefaultNotionUrl(config, flags = {}) {
+  const explicit = optionalString(flags, "ntn", "");
+  if (explicit) return explicit;
+  if (config.defaultNotion) return config.defaultNotion;
+  const current = await readJson(path.join(ledgerRoot(config), "current.json"), undefined);
+  if (current?.notionUrl) return current.notionUrl;
+  throw new Error("Missing required flag: --ntn. Run `build_fast init --ntn <page>` to save a default.");
+}
+
+async function saveCurrentContext(config, patch) {
+  await writeJson(path.join(ledgerRoot(config), "current.json"), {
+    ...patch,
+    updatedAt: nowIso()
+  });
+}
+
+function buildUserTestProfile(target, flags = {}) {
+  const configured = normalizeUserTestProfile(target.userTest || target.user_test);
+  const browser = normalizeRuntimeBrowserQa(target.browserQa || target.browser_qa);
+  const checks = [
+    ...configured.checks,
+    ...defaultUserTestChecks(target, browser)
+  ];
+  const setup = [...configured.setup];
+  const urls = [...configured.urls];
+  if (browser?.startCommand && !setup.some((step) => step.command === browser.startCommand)) {
+    setup.push({ label: "Start demo", command: browser.startCommand });
+  }
+  if (browser?.url && !urls.includes(browser.url)) urls.push(browser.url);
+  const extraUrl = optionalString(flags, "url", "");
+  if (extraUrl && !urls.includes(extraUrl)) urls.push(extraUrl);
+  return {
+    setup,
+    urls,
+    checks: [...new Set(checks.map((check) => String(check || "").trim()).filter(Boolean))]
+  };
+}
+
+function normalizeUserTestProfile(value) {
+  if (!value || typeof value !== "object") return { setup: [], urls: [], checks: [] };
+  const setup = Array.isArray(value.setup)
+    ? value.setup.map((step) => {
+      if (typeof step === "string") return { label: step, command: step };
+      if (!step || typeof step !== "object") return null;
+      return {
+        label: String(step.label || step.name || step.command || step.url || "Setup").trim(),
+        command: step.command ? String(step.command).trim() : "",
+        url: step.url ? String(step.url).trim() : ""
+      };
+    }).filter(Boolean)
+    : [];
+  return {
+    setup,
+    urls: toStringList(value.urls || value.open || value.links),
+    checks: toStringList(value.checks || value.steps || value.scenarios)
+  };
+}
+
+function defaultUserTestChecks(target, browser) {
+  const checks = [];
+  if (target.goal) checks.push(`Confirm the shipped behavior matches the goal: ${target.goal}`);
+  if (Array.isArray(target.specs) && target.specs.length) {
+    for (const spec of target.specs) checks.push(`Confirm ${spec.id}: ${spec.title} works as expected.`);
+  } else if (Array.isArray(target.tasks)) {
+    for (const task of target.tasks.slice(0, 8)) {
+      const criterion = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria[0] : "";
+      checks.push(criterion ? `Confirm ${task.id}: ${criterion}` : `Confirm ${task.id}: ${task.title}`);
+    }
+  }
+  if (browser?.manualChecks?.length) checks.push(...browser.manualChecks);
+  if (browser?.requiredText?.length) checks.push(`Confirm the UI includes expected text: ${browser.requiredText.join(", ")}`);
+  if (browser?.requiredSelectors?.length) checks.push("Confirm the main UI controls render and are usable.");
+  checks.push("Confirm there are no obvious regressions, broken links, or confusing labels.");
+  return checks;
+}
+
+async function runUserTestSetup(profile, project, startedProcesses) {
+  const results = [];
+  for (const step of profile.setup) {
+    if (!step.command) {
+      results.push({ ...step, status: "skipped", detail: "no command" });
+      continue;
+    }
+    term.step(`Starting: ${step.command}`);
+    const child = spawn("/bin/zsh", ["-lc", step.command], {
+      cwd: project,
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    startedProcesses.push(child);
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { output += chunk.toString(); });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    results.push({ ...step, status: child.exitCode === null ? "running" : "exited", detail: firstOutputLine(output) });
+  }
+  return results;
+}
+
+async function promptUserTestChecklist(checks) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answers = [];
+    for (let index = 0; index < checks.length; index += 1) {
+      const check = checks[index];
+      term.section(`Check ${index + 1}/${checks.length}`);
+      term.line(term.wrapBlock(check, { indent: "", maxLines: 8 }));
+      const result = await askUserTestResult(rl);
+      const note = result === "pass" || result === "skip" ? "" : await askDefault(rl, "Notes", "");
+      answers.push({ id: `check-${String(index + 1).padStart(3, "0")}`, check, result, note });
+    }
+    return answers;
+  } finally {
+    rl.close();
+  }
+}
+
+async function askUserTestResult(rl) {
+  while (true) {
+    const value = (await askDefault(rl, "Result [pass/fail/tweak/skip]", "pass")).trim().toLowerCase();
+    if (["pass", "p", "y", "yes", ""].includes(value)) return "pass";
+    if (["fail", "f", "n", "no"].includes(value)) return "fail";
+    if (["tweak", "t"].includes(value)) return "tweak";
+    if (["skip", "s"].includes(value)) return "skip";
+    console.log("Choose pass, fail, tweak, or skip.");
+  }
+}
+
+function userTestStatus(answers) {
+  if (answers.some((answer) => answer.result === "fail")) return "failed";
+  if (answers.some((answer) => answer.result === "tweak")) return "needs_tweaks";
+  return "passed";
+}
+
+function scriptedUserTestAnswers(checks, flags = {}) {
+  const failChecks = parseCheckIndexes(flags["fail-checks"]);
+  const tweakChecks = parseCheckIndexes(flags["tweak-checks"]);
+  if (!failChecks.size && !tweakChecks.size) return null;
+  const note = optionalString(flags, "note", "Created from non-interactive user-test input.");
+  return checks.map((check, index) => {
+    const number = index + 1;
+    const result = failChecks.has(number) ? "fail" : tweakChecks.has(number) ? "tweak" : "pass";
+    return {
+      id: `check-${String(number).padStart(3, "0")}`,
+      check,
+      result,
+      note: result === "pass" ? "" : note
+    };
+  });
+}
+
+function parseCheckIndexes(value) {
+  if (!value || value === true) return value === true ? new Set([1]) : new Set();
+  return new Set(String(value).split(",").map((item) => Number(item.trim())).filter((item) => Number.isInteger(item) && item > 0));
+}
+
+async function saveUserTestRun(config, notionUrl, run) {
+  const dir = path.join(specDir(config, notionUrl), "user-tests");
+  await ensureDir(dir);
+  const filePath = path.join(dir, `${run.id}.json`);
+  await writeJson(filePath, run);
+  return filePath;
+}
+
+async function createUserTestFollowUpTasks({ config, notionUrl, target, program, answers }) {
+  const actionable = answers.filter((answer) => answer.result === "fail" || answer.result === "tweak");
+  if (!actionable.length) return [];
+  if (program) {
+    const specIndex = Math.max(0, program.specs.length - 1);
+    const spec = program.specs[specIndex];
+    const created = appendUserTestTasks(spec, actionable).map((task) => ({ ...task, specId: spec.id }));
+    program.specs[specIndex] = { ...spec, tasks: [...spec.tasks, ...created.map(({ specId, ...task }) => task)], status: spec.status === "completed" ? "planned" : spec.status, updatedAt: nowIso() };
+    program.status = "planned";
+    program.updatedAt = nowIso();
+    await saveProgram(config, notionUrl, program);
+    return created;
+  }
+  const created = appendUserTestTasks(target, actionable);
+  target.tasks = [...target.tasks, ...created];
+  target.status = target.status === "completed" ? "planned" : target.status;
+  target.updatedAt = nowIso();
+  await saveSpec(config, notionUrl, target);
+  return created;
+}
+
+function appendUserTestTasks(spec, actionable) {
+  const existing = spec.tasks || [];
+  const maxOrder = existing.reduce((max, task) => Math.max(max, Number(task.order || 0)), 0);
+  return actionable.map((answer, index) => {
+    const order = maxOrder + index + 1;
+    return {
+      id: `task-${String(order).padStart(3, "0")}`,
+      title: `[user-test] ${truncateUserTestTitle(answer.check)}`,
+      status: "pending",
+      order,
+      objective: `Address user-test ${answer.result}: ${answer.check}`,
+      instructions: answer.note ? `User note: ${answer.note}` : "Reproduce the user-test issue, make the smallest coherent fix, and preserve existing behavior.",
+      acceptanceCriteria: [`The user-test check passes: ${answer.check}`],
+      testPlan: ["Run automated checks.", "Run build_fast user-test again and confirm the check passes."],
+      risk: "medium",
+      dependencies: [],
+      expectedFiles: [],
+      parallelGroup: "serial",
+      kind: "user_test_followup"
+    };
+  });
+}
+
+function truncateUserTestTitle(value) {
+  const cleaned = String(value || "Follow-up").replace(/\s+/g, " ").trim();
+  return cleaned.length > 82 ? `${cleaned.slice(0, 79)}...` : cleaned;
 }
 
 async function programStatus(program, config, notionUrl, workers, flags) {

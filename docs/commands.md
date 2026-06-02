@@ -208,6 +208,34 @@ node bin/build_fast.js drive --ntn "$NTN" --qa browser
 
 When final QA fails, `drive` logs bugs, writes a JSON artifact, creates `[bug]` Spec Tasks, and syncs Notion. In `junior_mode`, it runs one automatic QA repair cycle by default, then reruns browser QA. With `--max-qa-repairs 0`, it stops after creating the bug tasks.
 
+## User Test
+
+Run a human acceptance pass after `go` and automated QA:
+
+```bash
+node bin/build_fast.js user-test --ntn "$NTN"
+```
+
+If `init` saved a default Notion page, the short form works from the project directory:
+
+```bash
+build_fast user-test
+```
+
+The command derives a checklist from the active spec/program, browser QA manual checks, and expected UI anchors. It saves each run under `.build_fast/specs/<target>/user-tests/`.
+
+Useful flags:
+
+| Flag | Purpose |
+| --- | --- |
+| `--dry-run` | Preview the checklist without saving a run |
+| `--run-setup` | Start configured setup commands, such as `npm run demo`, while the checklist runs |
+| `--keep-running` | Leave started setup processes running after the checklist exits |
+| `--create-tasks` | Add `[user-test]` follow-up tasks for failed/tweak checks |
+| `--yes` | Non-interactive pass-all mode for smoke tests |
+| `--fail-checks 1,3` | Non-interactively mark selected checklist numbers as failed |
+| `--tweak-checks 2` | Non-interactively mark selected checklist numbers as needing tweaks |
+
 The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types. If `playwright` is installed, QA also renders the page in Chromium, checks console/page errors, verifies rendered selectors/text, and runs configured interaction steps. Add `--require-playwright` to fail when Playwright is unavailable.
 
 When a spec or program has `browserQa`, QA uses that profile:

@@ -737,3 +737,15 @@ Improved `build_fast status` readability:
 - Long feedback checks render as wrapped bullet items instead of a single pipe-delimited line.
 - Browser QA configuration renders as a compact checklist.
 - Existing text anchors such as `Specs: 0/5 completed` and `Next: spec-001 ...` are preserved for scripts/tests.
+
+### Step 54: User Test Acceptance Loop
+
+Added the first human acceptance workflow:
+
+- Added `build_fast user-test` to preview or run a manual checklist after `go` and automated QA.
+- The command uses the saved Notion default from `init` when `--ntn` is omitted.
+- It derives checklist items from the active spec/program, browser QA manual checks, required text/selectors, and task acceptance criteria.
+- It writes local run artifacts under `.build_fast/specs/<target>/user-tests/`.
+- `--run-setup` can start configured setup commands while the user tests, and `--keep-running` leaves them alive afterward.
+- `--create-tasks` appends `[user-test]` follow-up tasks for failed or tweak-needed checks so the next `go` can repair them.
+- Added docs and regression coverage for dry-run, artifact writing, and follow-up task creation.
