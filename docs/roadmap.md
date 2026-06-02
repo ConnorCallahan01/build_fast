@@ -18,6 +18,7 @@
 - Add expected-file and parallel-group hints for workers. MVP added.
 - Add explicit integration tasks when parallel workers touch shared files. MVP added for smart parallel mode.
 - Add plan quality checks before workers start. MVP warnings/errors added with `drive --dry-run` and `--strict-plan`.
+- Improve planner prompts for parallelizable plans. MVP prompts now ask for minimal dependencies, precise expected files, and serial-only hard blockers.
 
 ### Safer Drive Mode
 

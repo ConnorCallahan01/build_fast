@@ -629,3 +629,16 @@ Added safer preflight behavior before launching agents:
 - Normal `drive` blocks hard plan errors before workers start; `--strict-plan` treats warnings as blockers too.
 - Smart parallel mode now prints selected and deferred task reasons.
 - Named `parallelGroup` values are now planner hints, while `parallelGroup: "serial"` remains a hard serialization signal. Independent tasks with different groups can run together when their expected files do not overlap.
+
+### Step 46: Parallel-Aware Planner Prompts
+
+The dry-run preview showed that the worker selector was capable of batching, but the planner still produced safe serial plans too often.
+
+Prompt changes:
+
+- Single-spec and multi-spec planners now treat parallelizable decomposition as a first-class objective.
+- Prompts explicitly tell the planner to minimize dependencies and avoid chaining specs/tasks unless there is a hard output dependency.
+- `expectedFiles` guidance now asks for precise files over broad directories.
+- `parallelGroup` guidance now frames group names as human-readable hints; only `"serial"` should force one-at-a-time execution.
+- Multi-spec planning now warns against making every spec depend on the previous spec.
+- Added prompt contract coverage so these parallel-planning instructions do not disappear in later edits.
