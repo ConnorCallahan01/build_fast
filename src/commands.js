@@ -943,6 +943,7 @@ async function runDriveQaFinalPass({ config, notionUrl, target, flags, autopilot
 
     const failed = result.checks.filter((check) => !check.ok);
     if (!failed.length) {
+      currentTarget = await resolveCompletedBugTasks(config, notionUrl, currentTarget);
       if (attempt > 0) await completeProgramSpecFromStandalone(config, notionUrl, currentTarget);
       console.log(`Final browser QA passed: ${result.url}`);
       return false;
@@ -959,6 +960,7 @@ async function runDriveQaFinalPass({ config, notionUrl, target, flags, autopilot
     await saveSpec(config, notionUrl, updated);
     await persistProgramSpecFromStandalone(config, notionUrl, updated);
     await sync({ ntn: notionUrl });
+    currentTarget = await refreshActiveSpecFromProgram(config, notionUrl, updated);
 
     if (!driveShouldAutoRepairQa(autopilot) || attempt >= maxQaRepairs) {
       console.log(`Created ${updated.tasks.at(-1).id} from final browser QA failures. Rerun drive to fix QA bugs.`);
@@ -1032,6 +1034,33 @@ async function runQaRepairCycle({ config, notionUrl, flags, autopilot, permissio
 
   await persistProgramSpecFromStandalone(config, notionUrl, spec);
   return { continueQa: true, target: spec };
+}
+
+async function refreshActiveSpecFromProgram(config, notionUrl, fallbackSpec) {
+  if (!fallbackSpec?._program?.specId) return await loadSpec(config, notionUrl) || fallbackSpec;
+  const program = await loadProgram(config, notionUrl);
+  const programSpec = program?.specs?.find((spec) => spec.id === fallbackSpec._program.specId);
+  if (!programSpec) return await loadSpec(config, notionUrl) || fallbackSpec;
+  const standalone = programToStandaloneSpec(program, programSpec);
+  await saveSpec(config, notionUrl, standalone);
+  return standalone;
+}
+
+async function resolveCompletedBugTasks(config, notionUrl, spec) {
+  const bugs = await readBugs(config, notionUrl);
+  if (!bugs.length) return spec;
+  const completedTasks = new Set((spec.tasks || []).filter((task) => task.status === "completed").map((task) => task.id));
+  let changed = false;
+  const updated = bugs.map((bug) => {
+    if (!bug.taskId || !completedTasks.has(bug.taskId) || bug.status === "done") return bug;
+    changed = true;
+    return { ...bug, status: "done", updatedAt: nowIso() };
+  });
+  if (changed) {
+    await saveBugs(config, notionUrl, updated);
+    await syncBugsOnly(config, notionUrl, spec);
+  }
+  return spec;
 }
 
 async function writeBrowserQaArtifact(config, notionUrl, result, failed) {
