@@ -131,7 +131,6 @@ export async function select(label, choices, defaultValue = "", options = {}) {
     return values[defaultIndex]?.value || defaultValue;
   }
 
-  readline.emitKeypressEvents(input);
   const previousRawMode = input.isRaw;
   input.setRawMode(true);
   input.resume();
@@ -156,30 +155,36 @@ export async function select(label, choices, defaultValue = "", options = {}) {
   }
 
   return await new Promise((resolve) => {
+    let finished = false;
+
     function done(value) {
-      input.off("keypress", onKey);
+      if (finished) return;
+      finished = true;
+      input.off("data", onData);
       input.setRawMode(previousRawMode);
       resolve(value);
     }
 
-    function onKey(_str, key) {
-      if (key?.name === "up") {
-        index = (index - 1 + values.length) % values.length;
-        render();
-      } else if (key?.name === "down") {
-        index = (index + 1) % values.length;
-        render();
-      } else if (key?.name === "return" || key?.name === "enter") {
-        done(values[index].value);
-      } else if (key?.name === "escape") {
-        done(values[defaultIndex]?.value || values[0].value);
-      } else if (key?.ctrl && key?.name === "c") {
+    function onData(buffer) {
+      const sequence = buffer.toString("utf8");
+      if (sequence === "\u0003") {
         output.write("\n");
         process.exit(130);
       }
+      if (sequence === "\r" || sequence === "\n") {
+        done(values[index].value);
+      } else if (sequence === "\u001b") {
+        done(values[defaultIndex]?.value || values[0].value);
+      } else if (sequence === "\u001b[A") {
+        index = (index - 1 + values.length) % values.length;
+        render();
+      } else if (sequence === "\u001b[B") {
+        index = (index + 1) % values.length;
+        render();
+      }
     }
 
-    input.on("keypress", onKey);
+    input.on("data", onData);
     render();
   });
 }

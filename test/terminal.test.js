@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { animatedBanner, banner, keyValue, line, section, select, wrapBlock } from "../src/terminal.js";
 
 const wrapped = wrapBlock("This is a long worker summary that should wrap into several readable terminal lines.", {
@@ -20,6 +21,35 @@ const selected = await select("Harness", ["claude", "codex"], "codex", {
   output: { isTTY: false }
 });
 assert.equal(selected, "codex");
+
+const fakeInput = new EventEmitter();
+fakeInput.isTTY = true;
+fakeInput.isRaw = false;
+fakeInput.setRawMode = (value) => {
+  fakeInput.isRaw = value;
+};
+fakeInput.resume = () => {};
+
+let fakeOutput = "";
+const fakeStream = {
+  isTTY: true,
+  columns: 80,
+  write(value) {
+    fakeOutput += value;
+  }
+};
+
+const selectPromise = select("Work type", ["feature", "project"], "feature", {
+  input: fakeInput,
+  output: fakeStream
+});
+setTimeout(() => {
+  fakeInput.emit("data", Buffer.from("\u001b[B"));
+  fakeInput.emit("data", Buffer.from("\r"));
+}, 0);
+assert.equal(await selectPromise, "project");
+assert.match(fakeOutput, /Work type/);
+assert.equal(fakeInput.isRaw, false);
 
 const writes = [];
 const originalLog = console.log;
