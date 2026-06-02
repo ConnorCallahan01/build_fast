@@ -472,3 +472,16 @@ Added first-pass versions of the next high-leverage product features:
 - `ship` dry-run/apply command for branch, commit, push, and optional draft PR creation through `gh`.
 
 These are intentionally MVP-grade surfaces. They make the workflow more powerful without changing the core Claude/worktree/Notion execution model.
+
+### Step 32: Feedback Repair Loop
+
+The Orbit Notes browser UI program exposed a missing recovery path: feedback checks could fail because generated feedback text contained non-runnable/manual commands, and `drive` stopped instead of handing the failure back to an agent.
+
+Added:
+
+- Feedback failures now create a `feedback_repair` task with the failed command/output as instructions.
+- Program mode can continue after adding the repair task instead of losing the active spec.
+- Active in-progress program specs resume from the active `spec.json` instead of being overwritten from stale `program.json`.
+- Feedback command filtering now rejects server/manual/browser/curl/localhost checks and prose like `node --check on every new .js file`.
+
+This let the UI demo program recover from malformed feedback commands and continue through all three specs.

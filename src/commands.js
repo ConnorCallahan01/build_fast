@@ -624,6 +624,13 @@ async function drive(flags) {
     console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
   }
   if (checks.some((check) => !check.ok)) {
+    const repaired = addFeedbackRepairTask(refreshed, checks, flags);
+    if (repaired) {
+      await saveSpec(config, notionUrl, repaired);
+      console.log(`Created ${repaired.tasks.at(-1).id} to repair failed feedback checks. Rerun drive to continue.`);
+      await sync({ ntn: notionUrl });
+      return;
+    }
     throw new Error("Drive feedback checks failed.");
   }
 
@@ -664,8 +671,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
     const existingSpec = await loadSpec(config, notionUrl);
     const isResumable = existingSpec
       && existingSpec._program?.specId === nextSpec.id
-      && readyPendingTasks(existingSpec).length === 0
-      && (nextSpec.status === "in_progress" || await specFilesCollectable(existingSpec));
+      && (nextSpec.status === "in_progress" || (readyPendingTasks(existingSpec).length === 0 && await specFilesCollectable(existingSpec)));
     if (!isResumable) {
       const standalone = programToStandaloneSpec(program, nextSpec);
       const repoContext = await scanRepo(program.project);
@@ -740,6 +746,12 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
     }
     if (checks.some((check) => !check.ok)) {
+      const repaired = addFeedbackRepairTask(completedSpec, checks, flags);
+      if (repaired) {
+        await saveSpec(config, notionUrl, repaired);
+        console.log(`Created ${repaired.tasks.at(-1).id} to repair failed feedback checks for ${nextSpec.id}. Continuing.`);
+        continue;
+      }
       throw new Error(`Drive feedback checks failed for ${nextSpec.id}.`);
     }
 
@@ -787,6 +799,51 @@ function shouldDriveApply(autopilot, collection) {
     return { apply: true, taskId: collection.recommendation.task.id, reason: collection.recommendation.reason };
   }
   return { apply: false, reason: "overlapping task outputs need manual choice" };
+}
+
+function addFeedbackRepairTask(spec, checks, flags = {}) {
+  const failed = checks.filter((check) => !check.ok);
+  if (!failed.length) return null;
+  const maxRepairs = Math.max(0, Number(optionalString(flags, "max-repairs", "2")));
+  const existingRepairs = (spec.tasks || []).filter((task) => task.kind === "feedback_repair").length;
+  if (existingRepairs >= maxRepairs) return null;
+
+  const nextOrder = (spec.tasks || []).reduce((max, task) => Math.max(max, task.order || 0), 0) + 1;
+  const id = `task-${String(nextOrder).padStart(3, "0")}`;
+  const completedTaskIds = (spec.tasks || [])
+    .filter((task) => task.status === "completed")
+    .map((task) => task.id);
+  const failureLines = failed.map((check) => `- ${check.command}: ${check.detail}`);
+  const task = {
+    id,
+    title: "Repair failed feedback checks",
+    status: "pending",
+    order: nextOrder,
+    kind: "feedback_repair",
+    objective: "Fix the implementation so build_fast feedback checks pass.",
+    instructions: [
+      "Inspect the current project state and repair the failed feedback checks below.",
+      "Do not reimplement unrelated features. Make the smallest coherent fix.",
+      "Failed feedback checks:",
+      ...failureLines
+    ].join("\n"),
+    acceptanceCriteria: [
+      "All failed feedback checks now pass.",
+      "Previously passing project checks still pass.",
+      "No unrelated behavior is changed."
+    ],
+    testPlan: [...new Set(failed.map((check) => check.command).filter(Boolean))],
+    risk: "medium",
+    dependencies: completedTaskIds,
+    createdAt: nowIso()
+  };
+  return {
+    ...spec,
+    status: "planned",
+    feedbackRepairAttempts: existingRepairs + 1,
+    tasks: [...(spec.tasks || []), task],
+    updatedAt: nowIso()
+  };
 }
 
 async function runFeedbackLoops(spec) {
@@ -843,6 +900,9 @@ function normalizeFeedbackCommand(command) {
 function isRunnableFeedbackCommand(command) {
   if (!command || command.includes("<") || command.includes(">")) return false;
   if (/\b(on|against|with)\s+the\b/i.test(command)) return false;
+  if (/\b(on every|every new|new \.js file|all new)\b/i.test(command)) return false;
+  if (/\b(open|browser|manual|curl|localhost|served demo|server returns)\b/i.test(command)) return false;
+  if (/^npm\s+run\s+(demo|dev|start|serve)\b/.test(command)) return false;
   if (/^git\s+(diff|status|log|show)\b/.test(command)) return false;
   const executable = command.split(/\s+/)[0];
   return ["npm", "node", "git", "npx", "pnpm", "yarn", "cargo", "python", "python3", "pytest", "go", "make"].includes(executable);
