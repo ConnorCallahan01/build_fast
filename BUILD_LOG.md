@@ -658,7 +658,7 @@ Improved terminal transparency for long autonomous runs:
 Started the transition from power-user commands to a true CLI workflow:
 
 - Added `init` to save project defaults for Notion page, project path, harness, autopilot, permission profile, smart parallel settings, browser QA, concurrency, and max tasks.
-- `init` can run interactively or with `--yes`; the harness chooser shows Claude/Codex/OpenCode while the MVP enforces Claude Code.
+- `init` can run interactively or with `--yes`; the interactive chooser uses arrow-key selections and shows Claude/Codex/OpenCode while the MVP enforces Claude Code.
 - `init --install-qa` can run the existing Playwright QA setup flow.
 - Added `go` as a friendly defaulted wrapper around `drive`, using the saved config values.
 - `plan` can now use saved Notion/project defaults and prompt for a goal/type when run interactively without flags.

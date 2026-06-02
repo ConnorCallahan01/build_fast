@@ -119,16 +119,30 @@ async function init(flags = {}) {
       rl = createInterface({ input: process.stdin, output: process.stdout });
       term.heading("build_fast init", path.basename(project));
       notion = await askDefault(rl, "Notion parent page URL", notion);
-      worker = await askChoice(rl, "Coding harness", worker, ["claude", "codex", "opencode"]);
+      worker = await askChoice(rl, "Coding harness", worker, [
+        { value: "claude", label: "Claude Code", detail: "available now" },
+        { value: "codex", label: "Codex", detail: "planned" },
+        { value: "opencode", label: "OpenCode", detail: "planned" }
+      ]);
       if (worker !== "claude") {
         term.warn("Unsupported harness", `${worker} is saved for future use, but this MVP runs Claude Code only`);
         worker = "claude";
       }
-      autopilot = await askChoice(rl, "Autopilot", autopilot, ["junior_mode", "intern_mode", "boss_mode"]);
-      permissionProfile = await askChoice(rl, "Permission profile", permissionProfile, ["managed", "inherit"]);
+      autopilot = await askChoice(rl, "Autopilot", autopilot, [
+        { value: "junior_mode", label: "junior_mode", detail: "balanced autonomy" },
+        { value: "intern_mode", label: "intern_mode", detail: "more checkpoints" },
+        { value: "boss_mode", label: "boss_mode", detail: "most autonomous" }
+      ]);
+      permissionProfile = await askChoice(rl, "Permission profile", permissionProfile, [
+        { value: "managed", label: "managed", detail: "build_fast maps permissions by autopilot" },
+        { value: "inherit", label: "inherit", detail: "use your harness defaults" }
+      ]);
       concurrency = Number(await askDefault(rl, "Worker concurrency", String(concurrency || 4)));
       maxTasks = Number(await askDefault(rl, "Max tasks per swarm", String(maxTasks || concurrency || 5)));
-      qa = await askChoice(rl, "Final QA mode", qa || "browser", ["browser", "none"]);
+      qa = await askChoice(rl, "Final QA mode", qa || "browser", [
+        { value: "browser", label: "browser", detail: "static checks plus Playwright when installed" },
+        { value: "none", label: "none", detail: "skip final browser QA" }
+      ]);
       installQa = await askYesNo(rl, "Install/check Playwright browser QA dependencies now?", installQa);
     }
   } finally {
@@ -186,8 +200,8 @@ async function init(flags = {}) {
 
   term.success("Saved config", ".build_fast/config.json");
   console.log("Next:");
-  console.log("  node bin/build_fast.js plan");
-  console.log("  node bin/build_fast.js go");
+  console.log(`  ${cliCommand()} plan`);
+  console.log(`  ${cliCommand()} go`);
 }
 
 async function initGitCheck(project) {
@@ -219,17 +233,37 @@ async function askDefault(rl, label, fallback = "") {
 }
 
 async function askChoice(rl, label, fallback, choices) {
-  const normalized = choices.join("/");
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    rl.pause();
+    try {
+      return await term.select(label, choices, fallback);
+    } finally {
+      rl.resume();
+    }
+  }
+  const values = choices.map((choice) => typeof choice === "string" ? choice : choice.value);
+  const normalized = values.join("/");
   while (true) {
     const value = (await askDefault(rl, `${label} (${normalized})`, fallback)).trim();
-    if (choices.includes(value)) return value;
+    if (values.includes(value)) return value;
     console.log(`Choose one of: ${normalized}`);
   }
 }
 
 async function askYesNo(rl, label, fallback = false) {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    const value = await askChoice(rl, label, fallback ? "yes" : "no", [
+      { value: "yes", label: "Yes" },
+      { value: "no", label: "No" }
+    ]);
+    return value === "yes";
+  }
   const value = (await askDefault(rl, `${label} (y/n)`, fallback ? "y" : "n")).toLowerCase();
   return value === "y" || value === "yes";
+}
+
+function cliCommand() {
+  return path.basename(process.argv[1] || "") === "build_fast.js" ? "node bin/build_fast.js" : "build_fast";
 }
 
 async function go(flags = {}) {

@@ -15,7 +15,7 @@ node bin/build_fast.js inspect --ntn "$NTN"
 node bin/build_fast.js status
 ```
 
-`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, smart parallel settings, and browser QA. The interactive wizard lets you choose Claude Code, Codex, or OpenCode as the desired harness; the current MVP saves/runs Claude Code only.
+`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, smart parallel settings, and browser QA. The interactive wizard uses arrow-key selectors for choices and lets you choose Claude Code, Codex, or OpenCode as the desired harness; the current MVP saves/runs Claude Code only.
 
 ## Goal And Planning
 
