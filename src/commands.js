@@ -999,7 +999,7 @@ async function drive(flags) {
     term.info("Collection", "no uncollected worktree output found");
   }
 
-  const refreshed = await loadSpec(config, notionUrl);
+  let refreshed = await loadSpec(config, notionUrl);
   term.step("Running feedback checks");
   const checks = await runFeedbackLoops(refreshed);
   for (const check of checks) {
@@ -1015,6 +1015,8 @@ async function drive(flags) {
     }
     throw new Error("Drive feedback checks failed.");
   }
+
+  refreshed = await resolveCompletedBugTasks(config, notionUrl, refreshed);
 
   if (await runDriveQaFinalPass({ config, notionUrl, target: refreshed, flags, autopilot, permissionProfile, concurrency, maxTasks })) return;
 
@@ -1034,6 +1036,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       type
     });
     config = await loadConfig();
+
     program = await loadProgram(config, notionUrl);
   }
 
@@ -1062,6 +1065,8 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
   let iterations = 0;
   const maxIterations = Math.max(1, Number(optionalString(flags, "max-iterations", "20")));
   while (iterations < maxIterations) {
+    completedSpec = await resolveCompletedBugTasks(config, notionUrl, completedSpec);
+
     program = await loadProgram(config, notionUrl);
     const ready = readyProgramSpecs(program);
     if (!ready.length) break;
@@ -1586,6 +1591,32 @@ async function resolveCompletedBugTasks(config, notionUrl, spec) {
   return spec;
 }
 
+async function updateLinkedBugTaskStatuses(config, notionUrl, spec, tasks = [], taskStatus = "") {
+  const taskIds = new Set(tasks.map((task) => task.id).filter(Boolean));
+  if (!taskIds.size) return false;
+  const nextStatus = bugStatusFromTaskStatus(taskStatus);
+  if (!nextStatus) return false;
+  const bugs = await readBugs(config, notionUrl);
+  if (!bugs.length) return false;
+  let changed = false;
+  const updated = bugs.map((bug) => {
+    if (!bug.taskId || !taskIds.has(bug.taskId) || bug.status === nextStatus) return bug;
+    changed = true;
+    return { ...bug, status: nextStatus, updatedAt: nowIso() };
+  });
+  if (!changed) return false;
+  await saveBugs(config, notionUrl, updated);
+  await syncBugsOnly(config, notionUrl, spec);
+  return true;
+}
+
+function bugStatusFromTaskStatus(taskStatus) {
+  if (taskStatus === "in_progress") return "in_progress";
+  if (taskStatus === "completed") return "done";
+  if (taskStatus === "failed" || taskStatus === "blocked") return "open";
+  return "";
+}
+
 async function writeBrowserQaArtifact(config, notionUrl, result, failed) {
   const safeTimestamp = nowIso().replace(/[:.]/g, "-");
   const dir = path.join(specDir(config, notionUrl), "qa-artifacts");
@@ -1759,6 +1790,7 @@ async function swarm(flags) {
     await updateNotionTaskStatus(config, notionUrl, task, "In progress");
   }
   await saveSpec(config, notionUrl, spec);
+  await updateLinkedBugTaskStatuses(config, notionUrl, spec, candidates, "in_progress");
 
   term.heading("Swarm", `${assignments.length} task${assignments.length === 1 ? "" : "s"} with concurrency ${concurrency}`);
   if (parallelMode === "smart") {
@@ -1794,6 +1826,7 @@ async function swarm(flags) {
         dependencyOverlays: result.assignment.dependencyOverlays
       }
     });
+    await updateLinkedBugTaskStatuses(config, notionUrl, latest, [result.task], result.patch.status);
   }
 
   term.success("Swarm finished", `${results.length} task${results.length === 1 ? "" : "s"}`);

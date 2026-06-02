@@ -97,4 +97,29 @@ assert.deepEqual(properties.Task.relation, [{ id: "task-page-id" }]);
 assert.equal(properties["Local ID"].rich_text[0].text.content, "bug-001");
 assert.match(properties.Details.rich_text[0].text.content, /stylesheet returned 404/);
 
+const inProgressProperties = buildBugProperties(
+  {
+    id: "bug-002",
+    title: "Browser QA failed: demo server",
+    source: "browser_qa",
+    status: "in_progress",
+    specId: "spec-001",
+    taskId: "task-004"
+  },
+  mapping.bugs,
+  {
+    id: "spec-001",
+    tasks: [
+      {
+        id: "task-004",
+        status: "in_progress",
+        notion: { taskPageId: "task-page-id-2" }
+      }
+    ]
+  },
+  "spec-page-id"
+);
+
+assert.equal(inProgressProperties.Status.status.name, "In progress");
+
 console.log("notion bugs tests passed");
