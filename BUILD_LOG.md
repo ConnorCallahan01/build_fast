@@ -607,3 +607,14 @@ The live Bugs loop test exposed a collection gap:
 - The worker correctly fixed `demo/index.html` and reported `changed_files: ["demo/index.html"]`, but `collect` trusted git detection and applied zero files.
 - Collection now verifies worker-reported changed files against the real main checkout project path and includes them when the files differ.
 - Manual `collect --apply` now derives the project subdirectory from the spec project path when repo context metadata is absent.
+
+### Step 44: GitHub Ship PR Handoff Polish
+
+Improved the `ship` workflow so GitHub review handoff carries the context accumulated by build_fast:
+
+- Preview mode now renders the same generated PR body that apply mode sends to `gh pr create`.
+- PR bodies include summary, goal, Notion link, repo URL, task status, changed files, recorded tests/checks, and related Bugs ledger entries.
+- Added `--base <branch>` for choosing the PR base branch.
+- Added `--ready` for creating non-draft PRs; draft remains the default.
+- Ship metadata now records staged changed files.
+- Added focused regression coverage for the PR body generator.

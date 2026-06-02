@@ -8,8 +8,8 @@
   },
   "scripts": {
     "doctor": "node bin/build_fast.js doctor",
-    "check": "node --check bin/build_fast.js && node --check src/cli.js && node --check src/commands.js && node --check src/config.js && node --check src/notion.js && node --check src/claude.js && node --check src/ledger.js && node --check src/prompts.js && node --check src/repo-scan.js && node --check src/util.js && node --check test/notion-url.test.js && node --check test/program-mode.test.js && node --check test/parallel-smart.test.js && node --check test/browser-qa.test.js && node --check test/qa-setup.test.js && node --check test/notion-bugs.test.js",
-    "test": "node test/notion-url.test.js && node test/program-mode.test.js && node test/parallel-smart.test.js && node test/browser-qa.test.js && node test/qa-setup.test.js && node test/notion-bugs.test.js"
+    "check": "node --check bin/build_fast.js && node --check src/cli.js && node --check src/commands.js && node --check src/config.js && node --check src/notion.js && node --check src/claude.js && node --check src/ledger.js && node --check src/prompts.js && node --check src/repo-scan.js && node --check src/util.js && node --check test/notion-url.test.js && node --check test/program-mode.test.js && node --check test/parallel-smart.test.js && node --check test/browser-qa.test.js && node --check test/qa-setup.test.js && node --check test/notion-bugs.test.js && node --check test/ship.test.js",
+    "test": "node test/notion-url.test.js && node test/program-mode.test.js && node test/parallel-smart.test.js && node test/browser-qa.test.js && node test/qa-setup.test.js && node test/notion-bugs.test.js && node test/ship.test.js"
   },
   "engines": {
     "node": ">=20"

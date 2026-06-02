@@ -3503,30 +3503,17 @@ async function ship(flags) {
   const apply = flags.apply === true || flags.apply === "true";
   const createPr = flags.pr === true || flags.pr === "true";
   const force = flags.force === true || flags.force === "true";
+  const draft = !(flags.ready === true || flags.ready === "true");
+  const baseBranch = optionalString(flags, "base", "");
   const projectPathspec = await gitPathspec(projectRoot, target.project);
   const collection = await collectSummary(config, notionUrl, target, undefined, { uncollectedOnly: true, skipMissing: true });
   const changedFiles = await gitChangedFiles(projectRoot, projectPathspec);
   const repoUrl = await gitRemoteUrl(projectRoot);
+  const bugs = await readBugs(config, notionUrl);
+  const prBody = shipPrBody(target, { changedFiles, bugs, repoUrl, notionUrl });
 
   if (!apply) {
-    console.log("Ship preview");
-    console.log(`Project git root: ${projectRoot}`);
-    console.log(`Project pathspec: ${projectPathspec}`);
-    console.log(`Branch: ${branch}`);
-    console.log(`Commit message: ${message}`);
-    console.log(`Changed files: ${changedFiles.length}`);
-    for (const file of changedFiles) console.log(`  ${file}`);
-    if (collection.reports.length) {
-      console.log("Uncollected completed worktree output:");
-      for (const report of collection.reports) console.log(`  ${report.task.id}: ${report.changedFiles.length} file${report.changedFiles.length === 1 ? "" : "s"}`);
-    }
-    console.log("Commands:");
-    console.log(`  git -C ${projectRoot} switch -c ${branch}  # or switch existing branch`);
-    console.log(`  git -C ${projectRoot} add -- ${projectPathspec}`);
-    console.log(`  git -C ${projectRoot} commit -m ${JSON.stringify(message)}`);
-    console.log(`  git -C ${projectRoot} push -u origin ${branch}`);
-    if (createPr) console.log(`  gh pr create --draft --title ${JSON.stringify(target.title)} --body <generated body>`);
-    console.log("Dry run only. Rerun with --apply to create branch/commit/push.");
+    printShipPreview({ projectRoot, projectPathspec, branch, message, changedFiles, collection, createPr, draft, baseBranch, prBody });
     return;
   }
 
@@ -3553,9 +3540,11 @@ async function ship(flags) {
 
   let prUrl = "";
   if (createPr) {
-    const body = shipPrBody(target);
+    const args = ["pr", "create", "--title", target.title, "--body", prBody];
+    if (draft) args.push("--draft");
+    if (baseBranch) args.push("--base", baseBranch);
     try {
-      const { stdout } = await execFileAsync("gh", ["pr", "create", "--draft", "--title", target.title, "--body", body], {
+      const { stdout } = await execFileAsync("gh", args, {
         cwd: projectRoot,
         timeout: 30000
       });
@@ -3575,6 +3564,7 @@ async function ship(flags) {
     repoUrl,
     prUrl,
     message,
+    changedFiles: staged,
     shippedAt
   };
   await saveShipMetadata({ config, notionUrl, spec, program, programSpec, shipPatch });
@@ -3584,19 +3574,75 @@ async function ship(flags) {
   console.log(`Ship metadata synced${prUrl ? `: ${prUrl}` : "."}`);
 }
 
-function shipPrBody(spec) {
+function printShipPreview({ projectRoot, projectPathspec, branch, message, changedFiles, collection, createPr, draft, baseBranch, prBody }) {
+  console.log("Ship preview");
+  console.log(`Project git root: ${projectRoot}`);
+  console.log(`Project pathspec: ${projectPathspec}`);
+  console.log(`Branch: ${branch}`);
+  if (baseBranch) console.log(`Base branch: ${baseBranch}`);
+  console.log(`Commit message: ${message}`);
+  console.log(`Changed files: ${changedFiles.length}`);
+  for (const file of changedFiles) console.log(`  ${file}`);
+  if (collection.reports.length) {
+    console.log("Uncollected completed worktree output:");
+    for (const report of collection.reports) {
+      const count = report.changedFiles.length;
+      console.log(`  ${report.task.id}: ${count} file${count === 1 ? "" : "s"}`);
+    }
+  }
+  console.log("Commands:");
+  console.log(`  git -C ${projectRoot} switch -c ${branch}  # or switch existing branch`);
+  console.log(`  git -C ${projectRoot} add -- ${projectPathspec}`);
+  console.log(`  git -C ${projectRoot} commit -m ${JSON.stringify(message)}`);
+  console.log(`  git -C ${projectRoot} push -u origin ${branch}`);
+  if (createPr) {
+    const draftFlag = draft ? "--draft " : "";
+    const baseFlag = baseBranch ? `--base ${baseBranch} ` : "";
+    console.log(`  gh pr create ${draftFlag}${baseFlag}--title <title> --body <generated body>`);
+    console.log("");
+    console.log("Generated PR body:");
+    console.log(prBody);
+  }
+  console.log("Dry run only. Rerun with --apply to create branch/commit/push.");
+}
+
+export function shipPrBody(spec, { changedFiles = [], bugs = [], repoUrl = "", notionUrl = "" } = {}) {
   const tasks = (spec.tasks || []).map((task) => `- ${task.status}: ${task.id} ${task.title}`).join("\n") || "- No tasks recorded.";
+  const completed = (spec.tasks || []).filter((task) => task.status === "completed").length;
+  const total = (spec.tasks || []).length;
+  const tests = [...new Set((spec.tasks || []).flatMap((task) => task.lastResult?.tests_run || task.testPlan || []))];
+  const specTaskIds = new Set((spec.tasks || []).map((task) => task.id));
+  const shippedBugs = bugs.filter((bug) => bug.specId === spec.id || specTaskIds.has(bug.taskId));
+  const bugLines = shippedBugs.length
+    ? shippedBugs.map((bug) => `- ${bug.status || "open"}: ${bug.id} ${bug.title}${bug.notion?.bugPageUrl ? ` (${bug.notion.bugPageUrl})` : ""}`).join("\n")
+    : "- None recorded.";
+  const changed = changedFiles.length ? changedFiles.map((file) => `- ${file}`).join("\n") : "- No changed files detected at preview time.";
+  const testLines = tests.length ? tests.map((test) => `- ${test}`).join("\n") : "- Not recorded.";
   return [
-    `Spec: ${spec.title}`,
+    "## Summary",
+    `Implements build_fast spec: ${spec.title}`,
     "",
     "Goal:",
     spec.goal,
     "",
-    "Tasks:",
+    `Notion: ${spec.notion?.specPageUrl || notionUrl || "not recorded"}`,
+    repoUrl ? `Repo: ${repoUrl}` : null,
+    "",
+    "## Tasks",
+    `${completed}/${total} completed`,
     tasks,
     "",
+    "## Changed Files",
+    changed,
+    "",
+    "## Tests / Checks",
+    testLines,
+    "",
+    "## Bugs",
+    bugLines,
+    "",
     "Generated by build_fast."
-  ].join("\n");
+  ].filter((line) => line !== null).join("\n");
 }
 
 async function switchShipBranch(projectRoot, branch) {

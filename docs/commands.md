@@ -264,15 +264,15 @@ Claude Code is the only supported adapter today. Unsupported adapters fail clear
 Preview branch/commit/push/PR commands:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --pr
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --pr --base main
 ```
 
-The preview prints the target git root, pathspec, changed files, uncollected completed worktree output, and the commands it would run.
+The preview prints the target git root, pathspec, changed files, uncollected completed worktree output, commands it would run, and the generated PR body.
 
 Apply the branch/commit/push flow and create a draft PR:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr --base main
 ```
 
 Useful flags:
@@ -282,6 +282,8 @@ Useful flags:
 | `--branch` | Branch to create or reuse |
 | `--message` | Commit message |
 | `--pr` | Open a draft PR through `gh pr create` |
+| `--base` | Base branch for `gh pr create` |
+| `--ready` | Create a non-draft PR |
 | `--force` | Allow shipping current checkout even when uncollected worktree output exists |
 
-On success, `ship` records branch, commit, repo URL, PR URL, and shipped timestamp in local spec state, syncs Notion `GitHub Repo`/`GitHub PR` properties when present, and appends a ship summary.
+On success, `ship` records branch, commit, repo URL, PR URL, changed files, and shipped timestamp in local spec state, syncs Notion `GitHub Repo`/`GitHub PR` properties when present, and appends a ship summary. PR bodies include the spec goal, Notion link, task status, changed files, recorded checks, and related Bugs ledger entries.

@@ -213,16 +213,16 @@ In smart mode, planners include `expectedFiles` and `parallelGroup` hints. `swar
 Preview the release handoff first:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --pr
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --pr --base main
 ```
 
 Apply it when the preview is right:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr --base main
 ```
 
-`ship` refuses to apply when completed worktree output is still uncollected, commits only the target project path, pushes the branch, opens a draft PR through `gh` when requested, then syncs repo/PR metadata back to Notion.
+`ship` refuses to apply when completed worktree output is still uncollected, commits only the target project path, pushes the branch, opens a draft PR through `gh` when requested, then syncs repo/PR metadata back to Notion. The preview prints the generated PR body so you can inspect the summary, tasks, changed files, checks, and linked bugs before pushing. Add `--ready` if you want a non-draft PR.
 
 ## Notion Setup
 
