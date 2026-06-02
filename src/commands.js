@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { cp, mkdir, rm, realpath } from "node:fs/promises";
+import { appendFile, cp, mkdir, rm, realpath, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
@@ -231,6 +231,7 @@ async function initGitCheck(project, options = {}) {
   try {
     const root = await resolveGitRoot(project);
     term.success("git repo", root);
+    await ensureBuildFastGitignore(root);
     const remote = await gitRemoteUrl(root);
     if (remote) term.success("git remote", remote);
     else term.warn("git remote", "no origin remote configured");
@@ -254,9 +255,32 @@ async function initGitCheck(project, options = {}) {
   await execFileAsync("git", ["-C", project, "init"], { timeout: 10000 });
   const root = await resolveGitRoot(project);
   term.success("git repo", root);
+  await ensureBuildFastGitignore(root);
   const remote = await gitRemoteUrl(root);
   if (remote) term.success("git remote", remote);
   else term.warn("git remote", "no origin remote configured");
+}
+
+export async function ensureBuildFastGitignore(gitRoot) {
+  const filePath = path.join(gitRoot, ".gitignore");
+  let content = "";
+  try {
+    content = await readFile(filePath, "utf8");
+  } catch {
+    content = "";
+  }
+  const hasRule = content.split(/\r?\n/).some((line) => {
+    const normalized = line.trim();
+    return normalized === ".build_fast" || normalized === ".build_fast/" || normalized === "/.build_fast" || normalized === "/.build_fast/";
+  });
+  if (hasRule) {
+    term.success("gitignore", ".build_fast/ already ignored");
+    return;
+  }
+
+  const prefix = content && !content.endsWith("\n") ? "\n" : "";
+  await appendFile(filePath, `${prefix}.build_fast/\n`);
+  term.success("gitignore", "added .build_fast/");
 }
 
 function missingBuildFastSources(mapping) {

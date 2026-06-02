@@ -720,3 +720,11 @@ Follow-up fix:
 - Prompt templates now resolve relative to the installed build_fast package instead of the caller's project directory.
 - This fixes linked binary usage from other repositories, where `build_fast plan` previously looked for `<target-project>/prompts/multi-spec.md`.
 - Added package-path regression coverage by changing cwd to a temp directory before rendering prompt templates.
+
+### Step 52: Gitignore Setup
+
+Improved project initialization hygiene:
+
+- `init` now ensures `.build_fast/` is ignored whenever it detects or creates a git repository.
+- The helper appends the ignore rule only when missing and preserves existing `.gitignore` content.
+- Added regression coverage for creating `.gitignore` and avoiding duplicate `.build_fast/` rules.
