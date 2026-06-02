@@ -714,3 +714,9 @@ Improved interactive planning for long product specs:
 - `/cancel` aborts the current long-text prompt.
 - Existing one-line config prompts still use normal readline behavior.
 - Added regression coverage for pasted multi-line goal input and fallback behavior.
+
+Follow-up fix:
+
+- Prompt templates now resolve relative to the installed build_fast package instead of the caller's project directory.
+- This fixes linked binary usage from other repositories, where `build_fast plan` previously looked for `<target-project>/prompts/multi-spec.md`.
+- Added package-path regression coverage by changing cwd to a temp directory before rendering prompt templates.

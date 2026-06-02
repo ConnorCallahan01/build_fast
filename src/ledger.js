@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ensureDir, newId, nowIso, readJson, slugify, writeJson } from "./util.js";
 import { specKeyFromNotion as keyFromNotion } from "./notion.js";
+import { packagePath } from "./paths.js";
 
 export function ledgerRoot(config, cwd = process.cwd()) {
   return path.resolve(cwd, config.ledgerDir || ".build_fast");
@@ -50,7 +51,7 @@ export async function saveText(runDir, name, content) {
 }
 
 export async function readTemplate(name) {
-  const filePath = path.resolve(process.cwd(), "prompts", name);
+  const filePath = packagePath("prompts", name);
   return readFile(filePath, "utf8");
 }
 

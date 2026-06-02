@@ -302,6 +302,7 @@ async function askChoice(rl, label, fallback, choices) {
   if (process.stdin.isTTY && process.stdout.isTTY) {
     rl.pause();
     try {
+      process.stdout.write("\n");
       return await term.select(label, choices, fallback);
     } finally {
       rl.resume();
