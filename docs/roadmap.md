@@ -32,8 +32,8 @@
 ### Browser QA
 
 - Add structured browser QA for static demo apps. MVP added.
+- Add project/spec-specific browser QA profiles. MVP added.
 - Capture screenshots and DOM snapshots for failed UI checks.
-- Support project-specific QA profiles instead of Orbit-style default anchors.
 - Add Playwright-backed interaction checks when dependencies are available.
 
 ### Better Collection

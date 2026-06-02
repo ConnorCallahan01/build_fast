@@ -22,6 +22,15 @@ Use the repository context to create a useful implementation plan. Return only J
   "overview": "what we are building and how it relates to the codebase",
   "risks": ["risk or unknown"],
   "feedbackLoops": ["specific commands or checks to run"],
+  "browserQa": {
+    "startCommand": "command to start a local browser demo, or empty string",
+    "url": "http://127.0.0.1:${PORT}/",
+    "requiredText": ["text that must appear in the served HTML"],
+    "requiredSelectors": ["#id or .class anchors that must appear in HTML"],
+    "requiredAssets": true,
+    "requiredModules": ["served JavaScript module paths such as /demo/app.js"],
+    "manualChecks": ["browser behavior for the user to verify manually"]
+  },
   "tasks": [
     {
       "id": "task-001",
@@ -43,6 +52,7 @@ Planning rules:
 - Prefer risky/foundational tasks early.
 - Include feedback loops that prove done.
 - Use the detected project scripts and files instead of generic test instructions.
+- If the project has a browser demo or UI, include browserQa. Use empty startCommand when no browser QA applies.
 - Include dependencies when later tasks need earlier task output.
 - Include expectedFiles for each task so build_fast can avoid parallel workers editing the same files.
 - Use parallelGroup to mark safe parallel batches. Use "serial" for integration, shared-file, risky, or final verification tasks.

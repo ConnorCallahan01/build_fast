@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { checkHtmlAssets, htmlAssetReferences } from "../src/commands.js";
+import { browserQaHtmlChecks, browserQaProfile, checkHtmlAssets, htmlAssetReferences } from "../src/commands.js";
 
 const baseUrl = "http://127.0.0.1:8080/";
 
@@ -54,5 +54,36 @@ const wrongMimeChecks = await checkHtmlAssets(`
 `, baseUrl, fakeFetch);
 assert.equal(wrongMimeChecks[0].ok, false);
 assert.match(wrongMimeChecks[0].detail, /text\/javascript/);
+
+const profile = browserQaProfile({
+  browserQa: {
+    startCommand: "npm run preview",
+    url: "http://127.0.0.1:${PORT}/demo/",
+    requiredText: ["Orbit Notes"],
+    requiredSelectors: ["#app", ".hero"],
+    requiredAssets: true,
+    requiredModules: ["/demo/app.js"]
+  }
+});
+
+assert.equal(profile.startCommand, "npm run preview");
+assert.equal(profile.url, "http://127.0.0.1:${PORT}/demo/");
+assert.deepEqual(profile.requiredSelectors, ["#app", ".hero"]);
+
+const profileChecks = await browserQaHtmlChecks(`
+<!doctype html>
+<link rel="stylesheet" href="/demo/styles.css">
+<main id="app" class="shell hero">Orbit Notes</main>
+<script type="module" src="/demo/app.js"></script>
+`, baseUrl, profile, fakeFetch);
+assert.equal(profileChecks.every((check) => check.ok), true);
+
+const missingSelectorChecks = await browserQaHtmlChecks(`
+<!doctype html>
+<link rel="stylesheet" href="/demo/styles.css">
+<main id="app">Orbit Notes</main>
+<script type="module" src="/demo/app.js"></script>
+`, baseUrl, profile, fakeFetch);
+assert.equal(missingSelectorChecks.find((check) => check.name === "required selector .hero").ok, false);
 
 console.log("browser QA tests passed");

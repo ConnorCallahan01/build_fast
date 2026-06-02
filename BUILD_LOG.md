@@ -534,3 +534,15 @@ Added browser QA checks that:
 - fetch each linked asset,
 - require `200` responses and CSS/JavaScript MIME types,
 - cover the broken relative-path case with a fake-fetch regression test.
+
+### Step 37: Configurable Browser QA Profiles
+
+Generalized browser QA beyond the Orbit Notes fixture:
+
+- Planner prompts now ask for a `browserQa` profile when browser/UI work is present.
+- Single-spec and program ledgers preserve `browserQa`.
+- Program specs inherit the program-level profile when driven as standalone specs.
+- `qa --type browser` now uses configured `startCommand`, `url`, `requiredText`, `requiredSelectors`, `requiredAssets`, `requiredModules`, and `manualChecks`.
+- Status output shows when browser QA is configured.
+- The old Orbit Notes assumptions remain as a fallback for existing local tests.
+- Added regression coverage for profile selector/text/module/asset checks.

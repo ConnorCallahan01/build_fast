@@ -166,6 +166,22 @@ node bin/build_fast.js qa --ntn "$NTN" --type browser
 
 The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types.
 
+When a spec or program has `browserQa`, QA uses that profile:
+
+```json
+{
+  "startCommand": "npm run demo",
+  "url": "http://127.0.0.1:${PORT}/",
+  "requiredText": ["Dashboard"],
+  "requiredSelectors": ["#app", ".hero"],
+  "requiredAssets": true,
+  "requiredModules": ["/demo/app.js"],
+  "manualChecks": ["Create an item", "Filter the list"]
+}
+```
+
+Without a profile, QA falls back to the Orbit Notes fixture assumptions.
+
 Create bug-fix tasks immediately when QA fails:
 
 ```bash

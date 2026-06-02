@@ -262,6 +262,22 @@ The QA command starts the demo, waits for the page, fetches the HTML, and checks
 - served core and app JavaScript modules
 - linked stylesheet/script assets resolved from the served page URL, with `200` responses and CSS/JavaScript MIME types
 
+Plans can include a `browserQa` profile to make these checks project-specific:
+
+```json
+{
+  "startCommand": "npm run demo",
+  "url": "http://127.0.0.1:${PORT}/",
+  "requiredText": ["Orbit Notes"],
+  "requiredSelectors": ["#create-form", "#notes-list"],
+  "requiredAssets": true,
+  "requiredModules": ["/demo/app.js"],
+  "manualChecks": ["Create a note", "Search by text", "Filter by tag"]
+}
+```
+
+When no profile exists, `qa --type browser` falls back to the Orbit Notes fixture anchors so older local tests still work.
+
 If checks fail, bugs are logged locally:
 
 ```bash

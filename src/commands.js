@@ -1473,6 +1473,7 @@ async function status(flags) {
   console.log(`Tasks: ${counts.completed}/${counts.total} completed, ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.failed} failed, ${counts.collected} collected`);
   console.log(`Next: ${next ? `${next.id} ${next.title}` : "none"}`);
   if (spec.repoContext?.feedbackLoops?.length) console.log(`Feedback: ${spec.repoContext.feedbackLoops.join(" | ")}`);
+  if (spec.browserQa) console.log(`Browser QA: ${browserQaStatusLine(spec.browserQa)}`);
   if (collection.overlaps.length) {
     console.log(`Collect: overlaps detected`);
     for (const overlap of collection.overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
@@ -1524,6 +1525,7 @@ async function programStatus(program, config, notionUrl, workers, flags) {
   console.log(`Specs: ${completedCount}/${program.specs.length} completed`);
   console.log(`Next: ${ready.length ? `${ready[0].id} ${ready[0].title}` : "none"}`);
   if (program.feedbackLoops?.length) console.log(`Feedback: ${program.feedbackLoops.join(" | ")}`);
+  if (program.browserQa) console.log(`Browser QA: ${browserQaStatusLine(program.browserQa)}`);
 
   console.log(`\nSpecs:`);
   for (const spec of program.specs) {
@@ -1536,6 +1538,17 @@ async function programStatus(program, config, notionUrl, workers, flags) {
     console.log("\nActive workers:");
     for (const worker of workers) console.log(`${worker.runId} ${worker.taskId} ${worker.status}`);
   }
+}
+
+function browserQaStatusLine(profile) {
+  const parts = [];
+  if (profile.startCommand) parts.push(profile.startCommand);
+  if (profile.url) parts.push(profile.url);
+  if (profile.requiredSelectors?.length) parts.push(`${profile.requiredSelectors.length} selectors`);
+  if (profile.requiredText?.length) parts.push(`${profile.requiredText.length} text checks`);
+  if (profile.requiredModules?.length) parts.push(`${profile.requiredModules.length} modules`);
+  if (profile.requiredAssets) parts.push("asset checks");
+  return parts.join(" | ") || "configured";
 }
 
 function taskCounts(spec) {
@@ -2520,7 +2533,7 @@ async function qa(flags) {
   if (!target) throw new Error("No local spec or program found. Run plan/drive first.");
   if (type !== "browser") throw new Error(`Unsupported QA type: ${type}. Current MVP supports --type browser.`);
 
-  const result = await runBrowserQa(target.project, flags);
+  const result = await runBrowserQa(target, flags);
   for (const check of result.checks) {
     console.log(`${check.ok ? "OK " : "ERR"} ${check.name}: ${check.detail}`);
   }
@@ -2550,19 +2563,22 @@ async function qa(flags) {
   console.log(`Browser QA passed: ${result.url}`);
 }
 
-async function runBrowserQa(projectDir, flags = {}) {
+async function runBrowserQa(target, flags = {}) {
+  const projectDir = target.project || target;
+  const profile = browserQaProfile(target, flags);
   const packageJson = await readJson(path.join(projectDir, "package.json"), {});
   const checks = [];
-  if (!packageJson.scripts?.demo) {
+  const startCommand = profile.startCommand || (packageJson.scripts?.demo ? "npm run demo" : "");
+  if (!startCommand) {
     return {
       url: null,
-      checks: [{ name: "demo script", ok: false, detail: "package.json has no scripts.demo" }]
+      checks: [{ name: "browser QA start command", ok: false, detail: "no browserQa.startCommand and package.json has no scripts.demo" }]
     };
   }
 
   const port = Number(optionalString(flags, "port", String(19000 + Math.floor(Math.random() * 1000))));
-  const url = `http://127.0.0.1:${port}/`;
-  const child = spawn("npm", ["run", "demo"], {
+  const url = profile.url.replaceAll("${PORT}", String(port));
+  const child = spawn("/bin/zsh", ["-lc", startCommand], {
     cwd: projectDir,
     env: { ...process.env, PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"]
@@ -2573,30 +2589,13 @@ async function runBrowserQa(projectDir, flags = {}) {
 
   try {
     const ready = await waitForHttp(url, 8000);
-    checks.push({ name: "demo server", ok: ready.ok, detail: ready.detail, command: "npm run demo" });
+    checks.push({ name: "demo server", ok: ready.ok, detail: ready.detail, command: startCommand });
     if (!ready.ok) return { url, checks };
 
     const htmlResponse = await fetch(url);
     const html = await htmlResponse.text();
     checks.push({ name: "index.html", ok: htmlResponse.ok && /<!doctype html/i.test(html), detail: `${htmlResponse.status} ${htmlResponse.headers.get("content-type") || ""}` });
-    checks.push({ name: "create note form", ok: hasAll(html, ["note-title", "note-body", "note-tags", "create-form"]), detail: "expected title/body/tags/create form anchors" });
-    checks.push({ name: "search and tag UI", ok: hasAll(html, ["search-input", "tag-filter", "notes-list"]), detail: "expected search/tag/list anchors" });
-    checks.push({ name: "module script", ok: hasModuleScript(html, "./app.js") || hasModuleScript(html, "/demo/app.js"), detail: "expected demo/app.js module script" });
-    checks.push(...await checkHtmlAssets(html, url));
-
-    const moduleResponse = await fetch(new URL("/src/orbit-notes.js", url));
-    checks.push({
-      name: "core module served",
-      ok: moduleResponse.ok && /javascript|ecmascript/.test(moduleResponse.headers.get("content-type") || ""),
-      detail: `${moduleResponse.status} ${moduleResponse.headers.get("content-type") || ""}`
-    });
-
-    const appResponse = await fetch(new URL("/demo/app.js", url));
-    checks.push({
-      name: "app module served",
-      ok: appResponse.ok && /javascript|ecmascript/.test(appResponse.headers.get("content-type") || ""),
-      detail: `${appResponse.status} ${appResponse.headers.get("content-type") || ""}`
-    });
+    checks.push(...await browserQaHtmlChecks(html, url, profile));
   } catch (error) {
     checks.push({ name: "browser QA runtime", ok: false, detail: error.message || String(error) });
   } finally {
@@ -2610,8 +2609,93 @@ async function runBrowserQa(projectDir, flags = {}) {
   return { url, checks };
 }
 
+export function browserQaProfile(target = {}, flags = {}) {
+  const configured = normalizeRuntimeBrowserQa(target.browserQa || target.browser_qa);
+  if (configured) return configured;
+  return {
+    startCommand: optionalString(flags, "start-command", "npm run demo"),
+    url: optionalString(flags, "url", "http://127.0.0.1:${PORT}/"),
+    requiredText: [],
+    requiredSelectors: ["#note-title", "#note-body", "#note-tags", "#create-form", "#search-input", "#tag-filter", "#notes-list"],
+    requiredAssets: true,
+    requiredModules: ["/src/orbit-notes.js", "/demo/app.js"],
+    manualChecks: []
+  };
+}
+
+function normalizeRuntimeBrowserQa(value) {
+  if (!value || typeof value !== "object") return undefined;
+  return {
+    startCommand: String(value.startCommand || value.start_command || "").trim(),
+    url: String(value.url || "http://127.0.0.1:${PORT}/").trim(),
+    requiredText: toStringList(value.requiredText || value.required_text),
+    requiredSelectors: toStringList(value.requiredSelectors || value.required_selectors),
+    requiredAssets: value.requiredAssets !== false && value.required_assets !== false,
+    requiredModules: toStringList(value.requiredModules || value.required_modules),
+    manualChecks: toStringList(value.manualChecks || value.manual_checks)
+  };
+}
+
+export async function browserQaHtmlChecks(html, url, profile, fetchImpl = fetch) {
+  const checks = [];
+  for (const text of profile.requiredText || []) {
+    checks.push({ name: `required text ${text}`, ok: html.includes(text), detail: text });
+  }
+  for (const selector of profile.requiredSelectors || []) {
+    checks.push({ name: `required selector ${selector}`, ok: htmlHasSelectorAnchor(html, selector), detail: selector });
+  }
+  if (profile.requiredModules?.length) {
+    for (const modulePath of profile.requiredModules) {
+      checks.push(await checkServedJavaScriptModule(modulePath, url, fetchImpl));
+    }
+  }
+  if (profile.requiredAssets) {
+    checks.push(...await checkHtmlAssets(html, url, fetchImpl));
+  }
+  return checks;
+}
+
+async function checkServedJavaScriptModule(modulePath, baseUrl, fetchImpl = fetch) {
+  try {
+    const response = await fetchImpl(new URL(modulePath, baseUrl));
+    const contentType = response.headers?.get?.("content-type") || "";
+    return {
+      name: `served module ${modulePath}`,
+      ok: response.ok && assetContentTypeOk("script", contentType),
+      detail: `${response.status} ${contentType || "missing content-type"}`
+    };
+  } catch (error) {
+    return {
+      name: `served module ${modulePath}`,
+      ok: false,
+      detail: error.message || String(error)
+    };
+  }
+}
+
 function hasAll(value, needles) {
   return needles.every((needle) => value.includes(needle));
+}
+
+function htmlHasSelectorAnchor(html, selector) {
+  const value = String(selector || "").trim();
+  if (!value) return false;
+  if (value.startsWith("#")) return html.includes(`id="${value.slice(1)}"`) || html.includes(`id='${value.slice(1)}'`);
+  if (value.startsWith(".")) return htmlClassExists(html, value.slice(1));
+  return new RegExp(`<${value}(\\s|>|/)`, "i").test(html);
+}
+
+function htmlClassExists(html, className) {
+  for (const match of html.matchAll(/\bclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
+    const classes = (match[1] || match[2] || match[3] || "").split(/\s+/);
+    if (classes.includes(className)) return true;
+  }
+  return false;
+}
+
+function toStringList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
 function hasModuleScript(html, src) {

@@ -22,6 +22,15 @@ The user has given a large goal that needs to be broken into multiple sequential
   "overview": "what we are building and how the phases relate",
   "risks": ["risk or unknown"],
   "feedbackLoops": ["specific commands or checks to run after every spec"],
+  "browserQa": {
+    "startCommand": "command to start a local browser demo, or empty string",
+    "url": "http://127.0.0.1:${PORT}/",
+    "requiredText": ["text that must appear in the served HTML"],
+    "requiredSelectors": ["#id or .class anchors that must appear in HTML"],
+    "requiredAssets": true,
+    "requiredModules": ["served JavaScript module paths such as /demo/app.js"],
+    "manualChecks": ["browser behavior for the user to verify manually"]
+  },
   "specs": [
     {
       "id": "spec-001",
@@ -55,6 +64,7 @@ Planning rules:
 - Late specs should add features, polish, and integrate everything.
 - Within each spec, make tasks small enough for one fresh Claude Code invocation.
 - Prefer risky/foundational tasks early within each spec.
+- If the program has a browser demo or UI, include browserQa at the program level. Use empty startCommand when no browser QA applies.
 - Include expectedFiles for each task so build_fast can avoid parallel workers editing the same files.
 - Use parallelGroup to mark safe parallel batches. Use "serial" for integration, shared-file, risky, or final verification tasks.
 - Include feedback loops that prove done at the program level.

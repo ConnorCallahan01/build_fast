@@ -68,6 +68,7 @@ export function makeSpec({ goal, type, project, notionUrl, plan }) {
     overview: plan?.overview || "",
     risks: plan?.risks || [],
     feedbackLoops: plan?.feedbackLoops || [],
+    browserQa: normalizeBrowserQa(plan?.browserQa),
     tasks: (plan?.tasks || []).map((task, index) => ({
       id: task.id || `task-${String(index + 1).padStart(3, "0")}`,
       title: task.title || `Task ${index + 1}`,
@@ -141,6 +142,7 @@ export function makeProgram({ goal, type, project, notionUrl, plan }) {
     overview: plan?.overview || "",
     risks: plan?.risks || [],
     feedbackLoops: plan?.feedbackLoops || [],
+    browserQa: normalizeBrowserQa(plan?.browserQa),
     specs,
     status: "planned",
     createdAt: nowIso(),
@@ -151,6 +153,19 @@ export function makeProgram({ goal, type, project, notionUrl, plan }) {
 function normalizeStringArray(value) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function normalizeBrowserQa(value) {
+  if (!value || typeof value !== "object") return undefined;
+  const startCommand = String(value.startCommand || value.start_command || "").trim();
+  const requiredText = normalizeStringArray(value.requiredText || value.required_text);
+  const requiredSelectors = normalizeStringArray(value.requiredSelectors || value.required_selectors);
+  const requiredModules = normalizeStringArray(value.requiredModules || value.required_modules);
+  const manualChecks = normalizeStringArray(value.manualChecks || value.manual_checks);
+  const url = String(value.url || "http://127.0.0.1:${PORT}/").trim();
+  const requiredAssets = value.requiredAssets !== false && value.required_assets !== false;
+  if (!startCommand && !requiredText.length && !requiredSelectors.length && !requiredModules.length) return undefined;
+  return { startCommand, url, requiredText, requiredSelectors, requiredAssets, requiredModules, manualChecks };
 }
 
 export async function saveProgram(config, notionUrl, program, cwd = process.cwd()) {
@@ -208,6 +223,7 @@ export function programToStandaloneSpec(program, spec) {
     overview: spec.overview,
     risks: program.risks || [],
     feedbackLoops: program.feedbackLoops || [],
+    browserQa: spec.browserQa || program.browserQa,
     tasks: (spec.tasks || []).map((task) => {
       const deps = (task.dependencies || []).filter((dep) => specTaskIds.has(dep));
       const resolved = (task.dependencies || []).filter((dep) => !specTaskIds.has(dep) && resolvedDeps.has(dep));

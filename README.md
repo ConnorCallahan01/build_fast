@@ -141,6 +141,22 @@ node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
 
 Browser QA fetches the served HTML, verifies expected UI anchors, resolves linked stylesheets/scripts the same way a browser does, and checks those assets return `200` with CSS/JavaScript MIME types. This catches broken paths like a page served at `/` linking to `./styles.css` when the stylesheet actually lives under `/demo/styles.css`.
 
+Specs can define a browser QA profile so the checks are project-specific instead of Orbit-specific:
+
+```json
+{
+  "browserQa": {
+    "startCommand": "npm run demo",
+    "url": "http://127.0.0.1:${PORT}/",
+    "requiredText": ["Orbit Notes"],
+    "requiredSelectors": ["#create-form", "#notes-list"],
+    "requiredAssets": true,
+    "requiredModules": ["/demo/app.js"],
+    "manualChecks": ["Create a note", "Search by text", "Filter by tag"]
+  }
+}
+```
+
 ## Smart Parallel Runs
 
 Use smart parallel mode when you want more agents running at once without blindly launching tasks that are likely to edit the same files:
