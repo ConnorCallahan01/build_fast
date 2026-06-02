@@ -206,6 +206,7 @@ export function duration(started) {
 export function wrapBlock(text, options = {}) {
   const width = Math.max(40, Number(options.width || process.stdout.columns || 100));
   const indent = options.indent || "  ";
+  const continuationIndent = options.continuationIndent || indent;
   const maxLines = Number(options.maxLines || 4);
   const words = String(text || "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   if (!words.length) return "";
@@ -215,7 +216,7 @@ export function wrapBlock(text, options = {}) {
   for (const word of words) {
     if ((line + word).length > width && line.trim()) {
       lines.push(line.trimEnd());
-      line = indent;
+      line = continuationIndent;
       if (lines.length >= maxLines) break;
     }
     line += `${word} `;

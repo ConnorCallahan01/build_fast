@@ -2602,13 +2602,36 @@ async function programStatus(program, config, notionUrl, workers, flags) {
 
   const ready = readyProgramSpecs(program);
   const completedCount = program.specs.filter((s) => s.status === "completed").length;
+  const taskProgress = programTaskCounts(program);
+  const currentSpec = ready[0] || program.specs.find((spec) => spec.status !== "completed") || program.specs.at(-1);
+  const currentCounts = currentSpec ? taskCounts(currentSpec) : null;
+  const bugs = await readBugs(config, notionUrl);
+  const bugSummary = summarizeBugs(bugs);
   term.section("Status");
   term.line(`${program.title} [${program.status}]`);
   term.keyValue("Project", program.project);
   term.keyValue("Specs", `${completedCount}/${program.specs.length} completed`);
+  term.keyValue("Tasks", `${taskProgress.completed}/${taskProgress.total} completed, ${taskProgress.pending} pending, ${taskProgress.inProgress} in progress, ${taskProgress.failed} failed`);
   term.keyValue("Next", ready.length ? `${ready[0].id} ${ready[0].title}` : "none");
+  term.keyValue("Next command", ready.length ? "build_fast go resumes from the next pending task" : "none");
+  if (bugs.length) term.keyValue("Bugs", `${bugSummary.open} open, ${bugSummary.inProgress} in progress, ${bugSummary.taskCreated} task-created, ${bugSummary.done} done`);
   if (program.feedbackLoops?.length) printStatusList("Feedback", program.feedbackLoops);
   if (program.browserQa) printStatusList("Browser QA", browserQaStatusParts(program.browserQa));
+
+  if (currentSpec && currentSpec.status !== "completed") {
+    term.section("Current Spec");
+    term.line(`${currentSpec.id} ${currentSpec.title} [${currentSpec.status}]`);
+    term.keyValue("Tasks", `${currentCounts.completed}/${currentCounts.total} completed, ${currentCounts.pending} pending, ${currentCounts.inProgress} in progress, ${currentCounts.failed} failed`);
+    const activeTasks = currentSpec.tasks.filter((task) => task.status === "in_progress");
+    const nextTasks = currentSpec.tasks.filter((task) => task.status === "pending").slice(0, 5);
+    if (activeTasks.length) printStatusList("Running Tasks", activeTasks.map((task) => `${task.id} ${task.title}`));
+    if (nextTasks.length) printStatusList("Next Tasks", nextTasks.map((task) => `${task.id} ${task.title}`));
+  }
+
+  const activeBugs = bugs.filter((bug) => !["done", "resolved", "closed"].includes(bug.status || ""));
+  if (activeBugs.length) {
+    printStatusList("Active Bugs", activeBugs.slice(0, 6).map((bug) => `${bug.status || "open"} ${bug.id}${bug.taskId ? ` -> ${bug.taskId}` : ""}: ${bug.title}`));
+  }
 
   term.section("Specs");
   for (const spec of program.specs) {
@@ -2621,6 +2644,31 @@ async function programStatus(program, config, notionUrl, workers, flags) {
     term.section("Active workers");
     for (const worker of workers) term.line(`${worker.runId} ${worker.taskId} ${worker.status}`);
   }
+}
+
+function programTaskCounts(program) {
+  return (program.specs || []).reduce((total, spec) => {
+    const counts = taskCounts(spec);
+    return {
+      total: total.total + counts.total,
+      completed: total.completed + counts.completed,
+      pending: total.pending + counts.pending,
+      inProgress: total.inProgress + counts.inProgress,
+      failed: total.failed + counts.failed,
+      collected: total.collected + counts.collected
+    };
+  }, { total: 0, completed: 0, pending: 0, inProgress: 0, failed: 0, collected: 0 });
+}
+
+function summarizeBugs(bugs = []) {
+  return bugs.reduce((summary, bug) => {
+    const status = bug.status || "open";
+    if (["done", "resolved", "closed"].includes(status)) summary.done += 1;
+    else if (status === "in_progress") summary.inProgress += 1;
+    else if (status === "task_created") summary.taskCreated += 1;
+    else summary.open += 1;
+    return summary;
+  }, { open: 0, inProgress: 0, taskCreated: 0, done: 0 });
 }
 
 function browserQaStatusLine(profile) {
@@ -2648,6 +2696,7 @@ function printStatusItem(item) {
   const wrapped = term.wrapBlock(String(item), {
     width: process.stdout.columns || 100,
     indent: "  - ",
+    continuationIndent: "    ",
     maxLines: 6
   });
   term.line(wrapped);

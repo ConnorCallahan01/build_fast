@@ -749,3 +749,13 @@ Added the first human acceptance workflow:
 - `--run-setup` can start configured setup commands while the user tests, and `--keep-running` leaves them alive afterward.
 - `--create-tasks` appends `[user-test]` follow-up tasks for failed or tweak-needed checks so the next `go` can repair them.
 - Added docs and regression coverage for dry-run, artifact writing, and follow-up task creation.
+
+### Step 55: Clearer Program Status Dashboard
+
+Improved `build_fast status` during large program runs:
+
+- Program status now shows aggregate task progress across all specs.
+- The active/current spec gets its own section with task counts.
+- The next pending tasks are listed directly, so users can see what `go` will resume.
+- Bug ledger state is summarized and active bugs are listed with linked repair task ids.
+- Wrapped bullets now use continuation indentation instead of looking like separate bullets.

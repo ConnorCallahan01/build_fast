@@ -16,6 +16,16 @@ for (const line of lines) {
 }
 assert.match(lines[0], /^\s+This is a long/);
 
+const bulletWrapped = wrapBlock("A long active bug title that should wrap without creating another bullet marker.", {
+  width: 42,
+  indent: "  - ",
+  continuationIndent: "    ",
+  maxLines: 4
+});
+const bulletLines = bulletWrapped.split("\n");
+assert.match(bulletLines[0], /^\s+- /);
+assert.match(bulletLines[1], /^\s{4}\S/);
+
 const selected = await select("Harness", ["claude", "codex"], "codex", {
   input: { isTTY: false },
   output: { isTTY: false }

@@ -34,7 +34,10 @@ try {
 
   const statusOutput = await cli(["status", "--ntn", notionTarget]);
   assert.match(statusOutput, /Specs: 0\/1 completed/);
+  assert.match(statusOutput, /Tasks: 0\/1 completed, 1 pending/);
   assert.match(statusOutput, /Next: spec-001 Full implementation/);
+  assert.match(statusOutput, /Current Spec/);
+  assert.match(statusOutput, /Next Tasks/);
 
   const specStatusOutput = await cli(["status", "--ntn", notionTarget, "--spec", "spec-001"]);
   assert.match(specStatusOutput, /spec-001: Full implementation \[planned\]/);
