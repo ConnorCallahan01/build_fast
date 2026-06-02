@@ -728,3 +728,12 @@ Improved project initialization hygiene:
 - `init` now ensures `.build_fast/` and `node_modules/` are ignored whenever it detects or creates a git repository.
 - The helper appends the ignore rule only when missing and preserves existing `.gitignore` content.
 - Added regression coverage for creating `.gitignore` and avoiding duplicate `.build_fast/` / `node_modules/` rules.
+
+### Step 53: Status Dashboard Formatting
+
+Improved `build_fast status` readability:
+
+- Status output now uses orange dashboard sections for summary, feedback, browser QA, specs/tasks, and active workers.
+- Long feedback checks render as wrapped bullet items instead of a single pipe-delimited line.
+- Browser QA configuration renders as a compact checklist.
+- Existing text anchors such as `Specs: 0/5 completed` and `Next: spec-001 ...` are preserved for scripts/tests.

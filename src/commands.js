@@ -2183,35 +2183,36 @@ async function status(flags) {
   const next = readyPendingTasks(spec)[0];
   const collection = await collectSummary(config, notionUrl, spec, undefined, { uncollectedOnly: true, skipMissing: true });
 
-  console.log(`${spec.title} [${spec.status}]`);
-  console.log(`Project: ${spec.project}`);
-  console.log(`Notion: ${spec.notion?.specPageUrl || spec.notionUrl || notionUrl}`);
-  console.log(`Tasks: ${counts.completed}/${counts.total} completed, ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.failed} failed, ${counts.collected} collected`);
-  console.log(`Next: ${next ? `${next.id} ${next.title}` : "none"}`);
-  if (spec.repoContext?.feedbackLoops?.length) console.log(`Feedback: ${spec.repoContext.feedbackLoops.join(" | ")}`);
-  if (spec.browserQa) console.log(`Browser QA: ${browserQaStatusLine(spec.browserQa)}`);
+  term.section("Status");
+  term.line(`${spec.title} [${spec.status}]`);
+  term.keyValue("Project", spec.project);
+  term.keyValue("Notion", spec.notion?.specPageUrl || spec.notionUrl || notionUrl);
+  term.keyValue("Tasks", `${counts.completed}/${counts.total} completed, ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.failed} failed, ${counts.collected} collected`);
+  term.keyValue("Next", next ? `${next.id} ${next.title}` : "none");
+  if (spec.repoContext?.feedbackLoops?.length) printStatusList("Feedback", spec.repoContext.feedbackLoops);
+  if (spec.browserQa) printStatusList("Browser QA", browserQaStatusParts(spec.browserQa));
   if (collection.overlaps.length) {
-    console.log(`Collect: overlaps detected`);
-    for (const overlap of collection.overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
-    if (collection.recommendation) console.log(`  recommended: ${collection.recommendation.task.id} (${collection.recommendation.reason})`);
+    term.keyValue("Collect", "overlaps detected");
+    for (const overlap of collection.overlaps) printStatusItem(`${overlap.file}: ${overlap.taskIds.join(", ")}`);
+    if (collection.recommendation) printStatusItem(`recommended: ${collection.recommendation.task.id} (${collection.recommendation.reason})`);
   } else if (collection.reports.length) {
-    console.log(`Collect: ${collection.reports.length} completed worktree output${collection.reports.length === 1 ? "" : "s"} available`);
+    term.keyValue("Collect", `${collection.reports.length} completed worktree output${collection.reports.length === 1 ? "" : "s"} available`);
   } else {
-    console.log(`Collect: no available worktree output`);
+    term.keyValue("Collect", "no available worktree output");
   }
 
-  console.log(`\nTasks:`);
+  term.section("Tasks");
   for (const task of spec.tasks) {
     const collected = task.collectedAt ? " [collected]" : "";
     const branch = task.lastResult?.branch ? ` branch=${task.lastResult.branch}` : "";
     const worktreeExists = task.lastResult?.worktree ? await pathExists(task.lastResult.worktree) : false;
     const worktree = task.lastResult?.worktree ? ` worktree=${worktreeExists ? task.lastResult.worktree : "cleaned"}` : "";
-    console.log(`${task.status.padEnd(11)} ${task.id} ${task.title}${collected}`);
-    if (branch || worktree) console.log(`            ${branch}${worktree}`.trimEnd());
+    term.line(`${task.status.padEnd(11)} ${task.id} ${task.title}${collected}`);
+    if (branch || worktree) term.line(`            ${branch}${worktree}`.trimEnd());
   }
   if (workers.length) {
-    console.log("\nActive workers:");
-    for (const worker of workers) console.log(`${worker.runId} ${worker.taskId} ${worker.status}`);
+    term.section("Active workers");
+    for (const worker of workers) term.line(`${worker.runId} ${worker.taskId} ${worker.status}`);
   }
 }
 
@@ -2225,38 +2226,45 @@ async function programStatus(program, config, notionUrl, workers, flags) {
     }
     const standalone = programToStandaloneSpec(program, matched);
     const counts = taskCounts(standalone);
-    console.log(`${matched.id}: ${matched.title} [${matched.status}]`);
-    console.log(`Tasks: ${counts.completed}/${counts.total} completed, ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.failed} failed`);
+    term.section("Status");
+    term.line(`${matched.id}: ${matched.title} [${matched.status}]`);
+    term.keyValue("Tasks", `${counts.completed}/${counts.total} completed, ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.failed} failed`);
+    term.section("Tasks");
     for (const task of matched.tasks) {
       const collected = task.collectedAt ? " [collected]" : "";
-      console.log(`  ${task.status.padEnd(11)} ${task.id} ${task.title}${collected}`);
+      term.line(`  ${task.status.padEnd(11)} ${task.id} ${task.title}${collected}`);
     }
     return;
   }
 
   const ready = readyProgramSpecs(program);
   const completedCount = program.specs.filter((s) => s.status === "completed").length;
-  console.log(`${program.title} [${program.status}]`);
-  console.log(`Project: ${program.project}`);
-  console.log(`Specs: ${completedCount}/${program.specs.length} completed`);
-  console.log(`Next: ${ready.length ? `${ready[0].id} ${ready[0].title}` : "none"}`);
-  if (program.feedbackLoops?.length) console.log(`Feedback: ${program.feedbackLoops.join(" | ")}`);
-  if (program.browserQa) console.log(`Browser QA: ${browserQaStatusLine(program.browserQa)}`);
+  term.section("Status");
+  term.line(`${program.title} [${program.status}]`);
+  term.keyValue("Project", program.project);
+  term.keyValue("Specs", `${completedCount}/${program.specs.length} completed`);
+  term.keyValue("Next", ready.length ? `${ready[0].id} ${ready[0].title}` : "none");
+  if (program.feedbackLoops?.length) printStatusList("Feedback", program.feedbackLoops);
+  if (program.browserQa) printStatusList("Browser QA", browserQaStatusParts(program.browserQa));
 
-  console.log(`\nSpecs:`);
+  term.section("Specs");
   for (const spec of program.specs) {
     const depLabel = spec.dependencies.length ? ` depends=[${spec.dependencies.join(", ")}]` : "";
     const counts = taskCounts(spec);
-    console.log(`${spec.status.padEnd(11)} ${spec.id} ${spec.title} (${counts.completed}/${counts.total} tasks)${depLabel}`);
+    term.line(`${spec.status.padEnd(11)} ${spec.id} ${spec.title} (${counts.completed}/${counts.total} tasks)${depLabel}`);
   }
 
   if (workers.length) {
-    console.log("\nActive workers:");
-    for (const worker of workers) console.log(`${worker.runId} ${worker.taskId} ${worker.status}`);
+    term.section("Active workers");
+    for (const worker of workers) term.line(`${worker.runId} ${worker.taskId} ${worker.status}`);
   }
 }
 
 function browserQaStatusLine(profile) {
+  return browserQaStatusParts(profile).join(" | ") || "configured";
+}
+
+function browserQaStatusParts(profile) {
   const parts = [];
   if (profile.startCommand) parts.push(profile.startCommand);
   if (profile.url) parts.push(profile.url);
@@ -2264,7 +2272,22 @@ function browserQaStatusLine(profile) {
   if (profile.requiredText?.length) parts.push(`${profile.requiredText.length} text checks`);
   if (profile.requiredModules?.length) parts.push(`${profile.requiredModules.length} modules`);
   if (profile.requiredAssets) parts.push("asset checks");
-  return parts.join(" | ") || "configured";
+  return parts.length ? parts : ["configured"];
+}
+
+function printStatusList(label, items = []) {
+  if (!items.length) return;
+  term.section(label);
+  for (const item of items) printStatusItem(item);
+}
+
+function printStatusItem(item) {
+  const wrapped = term.wrapBlock(String(item), {
+    width: process.stdout.columns || 100,
+    indent: "  - ",
+    maxLines: 6
+  });
+  term.line(wrapped);
 }
 
 function taskCounts(spec) {
