@@ -10,7 +10,10 @@ const codes = {
   green: "\x1b[32m",
   red: "\x1b[31m",
   yellow: "\x1b[33m",
+  orange: "\x1b[38;5;208m",
+  blue: "\x1b[34m",
   cyan: "\x1b[36m",
+  white: "\x1b[37m",
   magenta: "\x1b[35m"
 };
 
@@ -18,13 +21,68 @@ function color(code, value) {
   return colorEnabled ? `${code}${value}${codes.reset}` : value;
 }
 
+export function banner(title = "build_fast", subtitle = "") {
+  printBanner({ title, subtitle });
+}
+
+export async function animatedBanner(title = "build_fast", subtitle = "", options = {}) {
+  const output = options.output || process.stdout;
+  const shouldAnimate = Boolean(output.isTTY) && colorEnabled && process.env.BUILD_FAST_ANIMATION !== "0";
+  if (!shouldAnimate) {
+    printBanner({ title, subtitle });
+    return;
+  }
+
+  const frames = [
+    "build_fast .",
+    "build_fast ..",
+    "build_fast ...",
+    "build_fast >>>"
+  ];
+  output.write("\n");
+  for (const frame of frames) {
+    readline.clearLine(output, 0);
+    readline.cursorTo(output, 0);
+    output.write(color(codes.orange + codes.bold, frame));
+    await wait(55);
+  }
+  readline.clearLine(output, 0);
+  readline.cursorTo(output, 0);
+  printBanner({ title, subtitle, leadingNewline: false });
+}
+
+function printBanner({ title = "build_fast", subtitle = "", leadingNewline = true } = {}) {
+  const wordmark = [
+    " ____  _   _ ___ _     ____      _____  _    ____ _____",
+    "| __ )| | | |_ _| |   |  _ \\    |  ___|/ \\  / ___|_   _|",
+    "|  _ \\| | | || || |   | | | |   | |_  / _ \\ \\___ \\ | |",
+    "| |_) | |_| || || |___| |_| |   |  _|/ ___ \\ ___) || |",
+    "|____/ \\___/|___|_____|____/    |_| /_/   \\_\\____/ |_|"
+  ];
+  if (leadingNewline) console.log("");
+  console.log(color(codes.orange, "==== ==== ==== ==== ==== ==== ==== ====>"));
+  for (const line of wordmark) console.log(color(codes.orange + codes.bold, line));
+  console.log(color(codes.orange + codes.bold, "-------------> plan / swarm / verify / ship"));
+  if (title && title !== "build_fast") console.log(color(codes.bold, title));
+  if (subtitle) console.log(color(codes.dim, subtitle));
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function heading(label, detail = "") {
-  const text = detail ? `${label}: ${detail}` : label;
-  console.log(`\n${color(codes.bold + codes.cyan, `== ${text} ==`)}`);
+  const text = detail ? `${label} ${color(codes.dim, detail)}` : label;
+  console.log(`\n${color(codes.bold + codes.white, text)}`);
+}
+
+export function section(label) {
+  console.log(`\n${color(codes.bold, label)}`);
+  console.log(color(codes.orange, "-".repeat(Math.min(64, Math.max(24, String(label).length + 12)))));
 }
 
 export function step(label) {
-  console.log(color(codes.magenta, `-- ${label}`));
+  console.log(color(codes.magenta, `> ${label}`));
 }
 
 export function info(label, detail = "") {
@@ -48,12 +106,16 @@ export function check(ok, label, detail = "") {
   else failure(label, detail);
 }
 
+export function keyValue(label, value = "") {
+  console.log(`${color(codes.dim, `${label}:`)} ${value}`);
+}
+
 export function muted(value) {
   return color(codes.dim, value);
 }
 
 export function highlight(value) {
-  return color(codes.inverse, value);
+  return color(codes.orange + codes.bold, value);
 }
 
 export async function select(label, choices, defaultValue = "", options = {}) {
@@ -93,7 +155,6 @@ export async function select(label, choices, defaultValue = "", options = {}) {
     function done(value) {
       input.off("keypress", onKey);
       input.setRawMode(previousRawMode);
-      output.write("\n");
       resolve(value);
     }
 

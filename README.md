@@ -8,6 +8,18 @@
 goal contract -> repo-aware plan -> Notion sync -> worker swarm -> collect -> checks -> Notion sync
 ```
 
+Interactive setup opens with a fast orange terminal banner:
+
+```text
+==== ==== ==== ==== ==== ==== ==== ====>
+ ____  _   _ ___ _     ____      _____  _    ____ _____
+| __ )| | | |_ _| |   |  _ \    |  ___|/ \  / ___|_   _|
+|  _ \| | | || || |   | | | |   | |_  / _ \ \___ \ | |
+| |_) | |_| || || |___| |_| |   |  _|/ ___ \ ___) || |
+|____/ \___/|___|_____|____/    |_| /_/   \_\____/ |_|
+-------------> plan / swarm / verify / ship
+```
+
 ## Why This Exists
 
 Modern coding agents are powerful, but they still need good direction, clean task boundaries, and a way to report what changed. `build_fast` is built around that loop:
@@ -24,20 +36,26 @@ Modern coding agents are powerful, but they still need good direction, clean tas
 
 ## Current Status
 
-This is an MVP. It works locally, supports live Notion sync through the current Notion Data Sources API, can run Claude Code workers non-interactively, can create repair tasks from failed feedback checks, and includes a browser QA/bug-ledger path for final-pass fixes. In `junior_mode` and `boss_mode`, final browser QA can now create bug tasks and run a bounded repair pass automatically. It is not yet a packaged npm binary, and deeper GitHub/CI automation is still on the roadmap.
+This is an MVP. It works locally, supports live Notion sync through the current Notion Data Sources API, can run Claude Code workers non-interactively, can create repair tasks from failed feedback checks, and includes a browser QA/bug-ledger path for final-pass fixes. Claude Code and `junior_mode` are available now. Codex, OpenCode, `intern_mode`, and `boss_mode` are visible in setup as planned modes, but are not active defaults yet. Deeper GitHub/CI automation is still on the roadmap.
 
 ## Requirements
 
 - Node.js 20+
-- Git repo with at least one commit
+- Git repo with at least one commit for worktree swarms
 - Claude Code CLI available as `claude`
 - Notion integration token for live sync
 - Notion page shared with the integration
 
+Install the local binary during development:
+
+```bash
+npm link
+```
+
 Check your setup:
 
 ```bash
-node bin/build_fast.js doctor --ntn "<notion-page-url>"
+build_fast doctor --ntn "<notion-page-url>"
 ```
 
 Set Notion access:
@@ -51,33 +69,36 @@ export NOTION_API_TOKEN=secret_...
 Initialize the current project:
 
 ```bash
-node bin/build_fast.js init --ntn "https://www.notion.so/your-page-id" --install-qa
+build_fast init --ntn "https://www.notion.so/your-page-id" --install-qa
 ```
 
-This saves project defaults in `.build_fast/config.json`, checks Notion/Git/Claude Code, and optionally installs Playwright browser QA dependencies.
+This starts an interactive setup flow with arrow-key choices, saves project defaults in `.build_fast/config.json`, checks Notion/Git/Claude Code, and optionally installs Playwright browser QA dependencies.
+If the Notion parent page is blank, `init` creates the required build_fast data sources automatically.
+If the current folder is not a git repo, interactive init offers to run `git init`; non-interactive setup can pass `--init-git`.
+The banner animation only runs in a real TTY and can be disabled with `BUILD_FAST_ANIMATION=0`.
 
 Create a plan:
 
 ```bash
-node bin/build_fast.js plan
+build_fast plan
 ```
 
 Run the full agent loop:
 
 ```bash
-node bin/build_fast.js go
+build_fast go
 ```
 
 Check state:
 
 ```bash
-node bin/build_fast.js status
+build_fast status
 ```
 
 Clean worktrees after a successful run:
 
 ```bash
-node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
+build_fast cleanup --ntn "$NTN" --apply --force --branches
 ```
 
 ## Core Commands
@@ -111,13 +132,13 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 After a feature/program run, use browser QA when the target project exposes a static demo through `npm run demo`:
 
 ```bash
-node bin/build_fast.js qa --ntn "$NTN" --type browser
+build_fast qa --ntn "$NTN" --type browser
 ```
 
 If QA fails, `build_fast` writes bugs to the local ledger for that Notion target:
 
 ```bash
-node bin/build_fast.js bugs --ntn "$NTN"
+build_fast bugs --ntn "$NTN"
 ```
 
 When the Notion page has a `Bugs` data source, `sync`, `qa`, and `drive --qa` upsert local bug ledger entries into Notion. The expected Bugs properties are `Name`, `Status`, `Source`, `Severity`, `Spec`, `Task`, `Local ID`, `Command`, `Artifact`, and `Details`.
@@ -125,14 +146,14 @@ When the Notion page has a `Bugs` data source, `sync`, `qa`, and `drive --qa` up
 Convert open bugs into normal pending Spec Tasks, sync them to Notion, then drive fresh workers to fix them:
 
 ```bash
-node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
-node bin/build_fast.js drive --ntn "$NTN" --autopilot junior_mode --permission-profile managed
+build_fast bugs --ntn "$NTN" --create-tasks
+build_fast drive --ntn "$NTN" --autopilot junior_mode --permission-profile managed
 ```
 
 For one-command QA-to-task creation:
 
 ```bash
-node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
+build_fast qa --ntn "$NTN" --type browser --create-task
 ```
 
 Browser QA fetches the served HTML, verifies expected UI anchors, resolves linked stylesheets/scripts the same way a browser does, and checks those assets return `200` with CSS/JavaScript MIME types. This catches broken paths like a page served at `/` linking to `./styles.css` when the stylesheet actually lives under `/demo/styles.css`. If `playwright` is installed in the project, QA also renders the page in Chromium, checks for console/page errors, verifies rendered selectors/text, and can run configured interaction steps. Use `--require-playwright` when rendered QA must be enforced instead of skipped.
@@ -140,22 +161,22 @@ Browser QA fetches the served HTML, verifies expected UI anchors, resolves linke
 Check Playwright readiness for rendered QA:
 
 ```bash
-node bin/build_fast.js qa-setup --ntn "$NTN"
+build_fast qa-setup --ntn "$NTN"
 ```
 
 Install missing Playwright pieces into the target project:
 
 ```bash
-node bin/build_fast.js qa-setup --ntn "$NTN" --install
+build_fast qa-setup --ntn "$NTN" --install
 ```
 
 Run browser QA automatically at the end of `drive`:
 
 ```bash
-node bin/build_fast.js drive --ntn "$NTN" --qa browser
+build_fast drive --ntn "$NTN" --qa browser
 ```
 
-If final QA fails, `drive` logs bugs, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode` and `boss_mode`, `drive` automatically runs one QA repair pass by default, applies the fix output when safe, reruns QA, and then stops only if failures remain. Use `--max-qa-repairs 0` to only create bug tasks, or increase the limit for more retry cycles.
+If final QA fails, `drive` logs bugs, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode`, `drive` automatically runs one QA repair pass by default, applies the fix output when safe, reruns QA, and then stops only if failures remain. Use `--max-qa-repairs 0` to only create bug tasks, or increase the limit for more retry cycles.
 
 Specs can define a browser QA profile so the checks are project-specific instead of Orbit-specific:
 
@@ -189,7 +210,7 @@ Specs can define a browser QA profile so the checks are project-specific instead
 Use smart parallel mode when you want more agents running at once without blindly launching tasks that are likely to edit the same files:
 
 ```bash
-node bin/build_fast.js drive \
+build_fast drive \
   --ntn "$NTN" \
   --from-goal \
   --parallel smart \
@@ -204,7 +225,7 @@ In smart mode, planners include `expectedFiles` and `parallelGroup` hints. `swar
 Preview the orchestration before launching workers:
 
 ```bash
-node bin/build_fast.js drive --ntn "$NTN" --dry-run --parallel smart --concurrency 4 --max-tasks 4
+build_fast drive --ntn "$NTN" --dry-run --parallel smart --concurrency 4 --max-tasks 4
 ```
 
 The dry run prints plan-quality warnings, selected/deferred smart-parallel tasks, feedback checks, browser QA settings, and repair limits without syncing Notion or starting agents. `parallelGroup: "serial"` still forces one-at-a-time execution; other group names are treated as hints, so independent tasks with different groups can run together when their expected files do not overlap.
@@ -214,25 +235,26 @@ The dry run prints plan-quality warnings, selected/deferred smart-parallel tasks
 Preview the release handoff first:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --pr --base main
+build_fast ship --ntn "$NTN" --branch build-fast/my-feature --pr --base main
 ```
 
 Apply it when the preview is right:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr --base main
+build_fast ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr --base main
 ```
 
 `ship` refuses to apply when completed worktree output is still uncollected, commits only the target project path, pushes the branch, opens a draft PR through `gh` when requested, then syncs repo/PR metadata back to Notion. The preview prints the generated PR body so you can inspect the summary, tasks, changed files, checks, and linked bugs before pushing. Add `--ready` if you want a non-draft PR.
 
 ## Notion Setup
 
-`build_fast` expects a parent Notion page containing two inline databases:
+`build_fast` expects a parent Notion page containing build_fast data sources. The easiest path is to run `build_fast init` against a blank shared page and let the CLI create them:
 
-- `Build Specs`, with primary data source `Specs`
-- `Spec Tasks`, with primary data source `Spec Tasks`
+- `Specs`
+- `Spec Tasks`
+- `Bugs`
 
-The CLI uses Notion API version `2026-03-11` by default.
+The CLI uses Notion API version `2026-03-11` by default and writes current Data Source schemas.
 
 See [docs/notion-setup.md](docs/notion-setup.md) for the exact properties and integration setup.
 

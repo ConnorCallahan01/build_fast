@@ -12,13 +12,25 @@ Local state is keyed by the parsed Notion page ID under `.build_fast/specs/<id>/
 
 Create a regular Notion page for the project or workspace. This page is the target you pass with `--ntn`.
 
-Share the page with your Notion integration. Both inline databases below must be visible on the shared page.
+Share the page with your Notion integration. Then run init:
 
-## 2. Create The Specs Database
+```bash
+build_fast init --ntn "$NTN"
+```
 
-Create an inline database named `Build Specs`.
+If the page has no build_fast schema yet, init creates the required inline databases/data sources automatically. The same schema bootstrap also runs during `sync` and `drive`, so a blank parent page is a valid starting point.
 
-Its primary data source should be named `Specs`.
+## 2. Created Schema
+
+The automatic setup creates three inline databases with primary data sources named:
+
+- `Specs`
+- `Spec Tasks`
+- `Bugs`
+
+The CLI maps by data source name and required properties, not by the visual database block title.
+
+### Specs
 
 Required properties:
 
@@ -27,20 +39,13 @@ Required properties:
 | `Name` | Title | Spec title |
 | `Status` | Status | Use options `Draft`, `Ready`, `Building`, `Shipped` |
 | `Project` | Text | Absolute or relative project path |
-
-Recommended optional properties:
-
-| Property | Type | Notes |
-| --- | --- | --- |
 | `Spec ID` | Unique ID | Helpful for display |
-| `GitHub Repo` | URL | Reserved for future repo linking |
-| `GitHub PR` | URL | Reserved for future PR automation |
+| `GitHub Repo` | URL | Repo link from `ship` |
+| `GitHub PR` | URL | PR link from `ship` |
+| `Created` | Created time | Automatic |
+| `Updated` | Last edited time | Automatic |
 
-## 3. Create The Tasks Database
-
-Create a second inline database named `Spec Tasks`.
-
-Its primary data source should be named `Spec Tasks`.
+### Spec Tasks
 
 Required properties:
 
@@ -50,14 +55,30 @@ Required properties:
 | `Status` | Status | Use options `Not started`, `In progress`, `Done` |
 | `Spec` | Relation | Relates to the `Specs` data source |
 | `Branch` | Text | Branch/worktree used by the task |
+| `Order` | Unique ID | Helpful for sorting |
+| `Created` | Created time | Automatic |
+| `Updated` | Last edited time | Automatic |
 
-Recommended optional properties:
+### Bugs
+
+Required properties:
 
 | Property | Type | Notes |
 | --- | --- | --- |
-| `Order` | Unique ID | Helpful for sorting |
+| `Name` | Title | Bug title |
+| `Status` | Status | Use options `Not started`, `In progress`, `Done` |
+| `Source` | Select | Commonly `browser_qa`, `manual`, `feedback`, `worker` |
+| `Severity` | Select | Use options `P0`, `P1`, `P2`, `P3` |
+| `Spec` | Relation | Relates to the `Specs` data source |
+| `Task` | Relation | Relates to the `Spec Tasks` data source |
+| `Local ID` | Text | Local bug id used for dedupe |
+| `Command` | Text | Command/check that failed |
+| `Artifact` | Text | QA artifact path when available |
+| `Details` | Text | Failure details |
+| `Created` | Created time | Automatic |
+| `Updated` | Last edited time | Automatic |
 
-## 4. Configure The Integration
+## 3. Configure The Integration
 
 In Notion:
 
@@ -74,7 +95,7 @@ export NOTION_API_TOKEN=secret_...
 
 `build_fast` uses Notion API version `2026-03-11` by default.
 
-## 5. Verify The Page
+## 4. Verify The Page
 
 Inspect the page:
 
@@ -82,7 +103,7 @@ Inspect the page:
 node bin/build_fast.js inspect --ntn "$NTN"
 ```
 
-You should see both data sources and their properties. If `sync` cannot find the data sources, check the data source names and property names first.
+You should see the three build_fast data sources and their properties. If `sync` cannot find the data sources, check the data source names and property names first.
 
 Run a sync after creating a goal or plan:
 

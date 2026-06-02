@@ -99,9 +99,9 @@ Autopilot behavior:
 
 | Mode | Behavior |
 | --- | --- |
-| `intern_mode` | Stops before applying collection |
-| `junior_mode` | Applies the recommended integrated task when clear |
-| `boss_mode` | Intended for more aggressive automation; currently similar to `junior_mode` for collection |
+| `junior_mode` | Available now; applies the recommended integrated task when clear and runs the bounded QA repair pass |
+| `intern_mode` | Planned; intended for more checkpoints before applying changes |
+| `boss_mode` | Planned; intended for more aggressive autonomous execution |
 
 ## Smart Parallel Execution
 
@@ -275,7 +275,7 @@ Install missing Playwright pieces explicitly:
 node bin/build_fast.js qa-setup --ntn "$NTN" --install
 ```
 
-If final QA fails, `drive` logs the failures to the bug ledger, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode` and `boss_mode`, it automatically runs one fresh bug-worker repair cycle by default, applies the output when safe, and reruns browser QA. In `intern_mode`, or with `--max-qa-repairs 0`, it stops after creating the repair tasks.
+If final QA fails, `drive` logs the failures to the bug ledger, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode`, it automatically runs one fresh bug-worker repair cycle by default, applies the output when safe, and reruns browser QA. With `--max-qa-repairs 0`, it stops after creating the repair tasks.
 
 If the Notion page has a `Bugs` data source, bug ledger entries are also synced as Notion bug rows with relations back to the matching Spec and repair Task pages when those page ids are known.
 

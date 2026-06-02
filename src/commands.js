@@ -117,8 +117,10 @@ async function init(flags = {}) {
   try {
     if (interactive) {
       rl = createInterface({ input: process.stdin, output: process.stdout });
-      term.heading("build_fast init", path.basename(project));
+      await term.animatedBanner("build_fast", `Project setup for ${path.basename(project)}`);
+      term.section("Workspace");
       notion = await askDefault(rl, "Notion parent page URL", notion);
+      term.section("Agent");
       worker = await askChoice(rl, "Coding harness", worker, [
         { value: "claude", label: "Claude Code", detail: "available now" },
         { value: "codex", label: "Codex", detail: "planned" },
@@ -129,16 +131,22 @@ async function init(flags = {}) {
         worker = "claude";
       }
       autopilot = await askChoice(rl, "Autopilot", autopilot, [
-        { value: "junior_mode", label: "junior_mode", detail: "balanced autonomy" },
-        { value: "intern_mode", label: "intern_mode", detail: "more checkpoints" },
-        { value: "boss_mode", label: "boss_mode", detail: "most autonomous" }
+        { value: "junior_mode", label: "junior_mode", detail: "available now" },
+        { value: "intern_mode", label: "intern_mode", detail: "planned: extra checkpoints" },
+        { value: "boss_mode", label: "boss_mode", detail: "planned: highest autonomy" }
       ]);
+      if (autopilot !== "junior_mode") {
+        term.warn("Autopilot mode not ready", `${autopilot} is planned; saving junior_mode for now`);
+        autopilot = "junior_mode";
+      }
       permissionProfile = await askChoice(rl, "Permission profile", permissionProfile, [
         { value: "managed", label: "managed", detail: "build_fast maps permissions by autopilot" },
         { value: "inherit", label: "inherit", detail: "use your harness defaults" }
       ]);
+      term.section("Execution");
       concurrency = Number(await askDefault(rl, "Worker concurrency", String(concurrency || 4)));
       maxTasks = Number(await askDefault(rl, "Max tasks per swarm", String(maxTasks || concurrency || 5)));
+      term.section("Quality");
       qa = await askChoice(rl, "Final QA mode", qa || "browser", [
         { value: "browser", label: "browser", detail: "static checks plus Playwright when installed" },
         { value: "none", label: "none", detail: "skip final browser QA" }
@@ -150,6 +158,10 @@ async function init(flags = {}) {
   }
 
   if (worker !== "claude") throw new Error(`Unsupported worker adapter: ${worker}. Current MVP supports Claude Code only.`);
+  if (autopilot !== "junior_mode") {
+    term.warn("Autopilot mode not ready", `${autopilot} is planned; saving junior_mode for now`);
+    autopilot = "junior_mode";
+  }
   const patch = {
     defaultAgent: worker,
     defaultAutopilot: autopilot,
@@ -164,7 +176,10 @@ async function init(flags = {}) {
   };
   const config = await saveConfigPatch(patch);
 
-  term.heading("Setup checks");
+  term.section("Setup checks");
+  term.keyValue("project", project);
+  term.keyValue("notion", notion || "not configured");
+  term.keyValue("worker", `${worker} (${autopilot})`);
   const checks = [
     await commandCheck("node", ["--version"]),
     await commandCheck("git", ["--version"]),
@@ -179,10 +194,15 @@ async function init(flags = {}) {
     if (page.ok) {
       term.step("Inspecting Notion workspace schema");
       try {
-        const inspected = await inspectNotionPage(config, notion);
+        let inspected = await inspectNotionPage(config, notion);
+        if (flags["no-create-schema"] !== true && flags["no-create-schema"] !== "true") {
+          inspected = await ensureBuildFastNotionSchema(config, notion, inspected, { verbose: true });
+        }
+        const mapping = resolveBuildFastDataSources(inspected);
         const databases = inspected.databases?.length || 0;
-        const bugs = findDataSourceByTitle(inspected, "Bugs") ? "Bugs data source found" : "Bugs data source not found";
-        term.info("Notion databases", `${databases} child database${databases === 1 ? "" : "s"}; ${bugs}`);
+        const missing = missingBuildFastSources(mapping);
+        const detail = missing.length ? `missing ${missing.join(", ")}` : "ready";
+        term.info("Notion databases", `${databases} child database${databases === 1 ? "" : "s"}; build_fast schema ${detail}`);
       } catch (error) {
         term.warn("Notion inspect skipped", error.message);
       }
@@ -191,7 +211,10 @@ async function init(flags = {}) {
     term.warn("notion page", "not configured; pass --ntn later or rerun init");
   }
 
-  await initGitCheck(project);
+  await initGitCheck(project, {
+    interactive,
+    initGit: flags["init-git"] === true || flags["init-git"] === "true"
+  });
   if (installQa && patch.defaultQa === "browser") {
     await qaSetup({ project, install: true });
   } else if (patch.defaultQa === "browser") {
@@ -199,31 +222,49 @@ async function init(flags = {}) {
   }
 
   term.success("Saved config", ".build_fast/config.json");
-  console.log("Next:");
-  console.log(`  ${cliCommand()} plan`);
-  console.log(`  ${cliCommand()} go`);
+  term.section("Ready");
+  term.keyValue("plan work", `${cliCommand()} plan`);
+  term.keyValue("run loop", `${cliCommand()} go`);
 }
 
-async function initGitCheck(project) {
+async function initGitCheck(project, options = {}) {
   try {
     const root = await resolveGitRoot(project);
     term.success("git repo", root);
     const remote = await gitRemoteUrl(root);
     if (remote) term.success("git remote", remote);
     else term.warn("git remote", "no origin remote configured");
+    return;
   } catch (error) {
     term.warn("git repo", `${error.message}; initialize git before shipping PRs`);
   }
-}
 
-function findDataSourceByTitle(inspected, title) {
-  const wanted = String(title || "").toLowerCase();
-  for (const database of inspected?.databases || []) {
-    for (const source of database.dataSources || []) {
-      if (String(source.title || "").toLowerCase() === wanted) return source;
+  let shouldInit = options.initGit;
+  if (!shouldInit && options.interactive) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      shouldInit = await askYesNo(rl, "Initialize a git repository now?", true);
+    } finally {
+      rl.close();
     }
   }
-  return null;
+  if (!shouldInit) return;
+
+  term.step("Initializing git repository");
+  await execFileAsync("git", ["-C", project, "init"], { timeout: 10000 });
+  const root = await resolveGitRoot(project);
+  term.success("git repo", root);
+  const remote = await gitRemoteUrl(root);
+  if (remote) term.success("git remote", remote);
+  else term.warn("git remote", "no origin remote configured");
+}
+
+function missingBuildFastSources(mapping) {
+  return [
+    ["Specs", mapping.specs],
+    ["Spec Tasks", mapping.specTasks],
+    ["Bugs", mapping.bugs]
+  ].filter(([, source]) => !source).map(([name]) => name);
 }
 
 async function askDefault(rl, label, fallback = "") {
@@ -2747,9 +2788,11 @@ function isUnsafeRelativePath(filePath) {
 async function syncToDataSources(config, notionUrl, spec) {
   if (!config.notionToken) return { ok: false, detail: "missing NOTION_API_TOKEN" };
   let schema = await loadOrInspectSchema(config, notionUrl);
+  schema = await ensureBuildFastNotionSchema(config, notionUrl, schema);
   let mapping = resolveBuildFastDataSources(schema);
   if (!mapping.bugs) {
     schema = await refreshInspectedSchema(config, notionUrl);
+    schema = await ensureBuildFastNotionSchema(config, notionUrl, schema);
     mapping = resolveBuildFastDataSources(schema);
   }
   if (!mapping.specs || !mapping.specTasks) {
@@ -2826,6 +2869,120 @@ async function loadOrInspectSchema(config, notionUrl) {
   return refreshInspectedSchema(config, notionUrl);
 }
 
+async function ensureBuildFastNotionSchema(config, notionUrl, schema, options = {}) {
+  if (!config.notionToken || !schema?.ok) return schema;
+  let mapping = resolveBuildFastDataSources(schema);
+  let missing = missingBuildFastSources(mapping);
+  if (!missing.length) return schema;
+
+  const pageId = parseNotionId(notionUrl);
+  if (!pageId) return schema;
+
+  const notion = new NotionClient({ token: config.notionToken, version: config.notionVersion });
+  if (options.verbose) term.step("Creating missing build_fast Notion data sources");
+
+  if (!mapping.specs) {
+    await notion.createDatabase(pageId, "Specs", buildSpecsDataSourceProperties());
+    if (options.verbose) term.success("Created Notion data source", "Specs");
+    schema = await refreshSchemaUntil(config, notionUrl, (nextMapping) => nextMapping.specs);
+    mapping = resolveBuildFastDataSources(schema);
+  }
+
+  if (!mapping.specTasks && mapping.specs) {
+    await notion.createDatabase(pageId, "Spec Tasks", buildSpecTasksDataSourceProperties(mapping.specs.id));
+    if (options.verbose) term.success("Created Notion data source", "Spec Tasks");
+    schema = await refreshSchemaUntil(config, notionUrl, (nextMapping) => nextMapping.specTasks);
+    mapping = resolveBuildFastDataSources(schema);
+  }
+
+  if (!mapping.bugs && mapping.specs) {
+    await notion.createDatabase(pageId, "Bugs", buildBugsDataSourceProperties(mapping.specs.id, mapping.specTasks?.id));
+    if (options.verbose) term.success("Created Notion data source", "Bugs");
+    schema = await refreshSchemaUntil(config, notionUrl, (nextMapping) => nextMapping.bugs);
+    mapping = resolveBuildFastDataSources(schema);
+  }
+
+  missing = missingBuildFastSources(mapping);
+  if (options.verbose && missing.length) term.warn("Notion schema incomplete", `missing ${missing.join(", ")}`);
+  return schema;
+}
+
+export function buildSpecsDataSourceProperties() {
+  return {
+    Name: { title: {} },
+    Status: statusSchema(["Draft", "Ready", "Building", "Shipped"]),
+    Project: { rich_text: {} },
+    "GitHub Repo": { url: {} },
+    "GitHub PR": { url: {} },
+    "Spec ID": { unique_id: { prefix: "SPEC" } },
+    Created: { created_time: {} },
+    Updated: { last_edited_time: {} }
+  };
+}
+
+export function buildSpecTasksDataSourceProperties(specsDataSourceId) {
+  return {
+    Name: { title: {} },
+    Status: statusSchema(["Not started", "In progress", "Done"]),
+    Spec: relationSchema(specsDataSourceId),
+    Branch: { rich_text: {} },
+    Order: { unique_id: { prefix: "TASK" } },
+    Created: { created_time: {} },
+    Updated: { last_edited_time: {} }
+  };
+}
+
+export function buildBugsDataSourceProperties(specsDataSourceId, tasksDataSourceId = undefined) {
+  const properties = {
+    Name: { title: {} },
+    Status: statusSchema(["Not started", "In progress", "Done"]),
+    Source: selectSchema(["browser_qa", "manual", "feedback", "worker"]),
+    Severity: selectSchema(["P0", "P1", "P2", "P3"]),
+    Spec: relationSchema(specsDataSourceId),
+    "Local ID": { rich_text: {} },
+    Command: { rich_text: {} },
+    Artifact: { rich_text: {} },
+    Details: { rich_text: {} },
+    Created: { created_time: {} },
+    Updated: { last_edited_time: {} }
+  };
+  if (tasksDataSourceId) properties.Task = relationSchema(tasksDataSourceId);
+  return properties;
+}
+
+function statusSchema(names) {
+  return { status: { options: names.map((name) => ({ name })) } };
+}
+
+function selectSchema(names) {
+  return { select: { options: names.map((name) => ({ name })) } };
+}
+
+function relationSchema(dataSourceId) {
+  return {
+    relation: {
+      data_source_id: dataSourceId,
+      type: "single_property",
+      single_property: {}
+    }
+  };
+}
+
+async function refreshSchemaUntil(config, notionUrl, predicate) {
+  let schema;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    schema = await refreshInspectedSchema(config, notionUrl);
+    const mapping = resolveBuildFastDataSources(schema);
+    if (predicate(mapping)) return schema;
+    await delay(400);
+  }
+  return schema;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function refreshInspectedSchema(config, notionUrl) {
   const pageId = parseNotionId(notionUrl);
   const inspectPath = path.join(process.cwd(), ".build_fast", "notion-inspect", `${pageId}.json`);
@@ -2843,10 +3000,14 @@ export function resolveBuildFastDataSources(schema) {
     }
   }
   return {
-    specs: sources.find((source) => source.title === "Specs" && hasProperties(source, ["Name", "Status", "Project"])),
-    specTasks: sources.find((source) => source.title === "Spec Tasks" && hasProperties(source, ["Name", "Status", "Spec", "Branch"])),
-    bugs: sources.find((source) => source.title === "Bugs" && hasProperties(source, ["Name", "Status", "Source", "Local ID"]))
+    specs: sources.find((source) => sourceMatches(source, "Specs") && hasProperties(source, ["Name", "Status", "Project"])),
+    specTasks: sources.find((source) => sourceMatches(source, "Spec Tasks") && hasProperties(source, ["Name", "Status", "Spec", "Branch"])),
+    bugs: sources.find((source) => sourceMatches(source, "Bugs") && hasProperties(source, ["Name", "Status", "Source", "Local ID"]))
   };
+}
+
+function sourceMatches(source, title) {
+  return source.title === title || source.databaseTitle === title;
 }
 
 function hasProperties(source, names) {
@@ -3413,9 +3574,11 @@ async function syncBugsOnly(config, notionUrl, target) {
   if (!config.notionToken) return;
   try {
     let schema = await loadOrInspectSchema(config, notionUrl);
+    schema = await ensureBuildFastNotionSchema(config, notionUrl, schema);
     let mapping = resolveBuildFastDataSources(schema);
     if (!mapping.bugs) {
       schema = await refreshInspectedSchema(config, notionUrl);
+      schema = await ensureBuildFastNotionSchema(config, notionUrl, schema);
       mapping = resolveBuildFastDataSources(schema);
     }
     if (!mapping.bugs) return;

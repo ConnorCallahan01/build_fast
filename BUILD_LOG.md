@@ -664,3 +664,42 @@ Started the transition from power-user commands to a true CLI workflow:
 - `plan` can now use saved Notion/project defaults and prompt for a goal/type when run interactively without flags.
 - `status` can use the saved default Notion page.
 - Added smoke coverage for `init`, defaulted `plan`, and `go --dry-run`.
+
+### Step 49: Notion Schema Bootstrap And Init Polish
+
+Made blank Notion parent pages a valid setup path:
+
+- Added current Notion API database creation through `initial_data_source` on API version `2026-03-11`.
+- `init` now inspects the target page and creates missing `Specs`, `Spec Tasks`, and `Bugs` data sources automatically unless `--no-create-schema` is passed.
+- `sync`/`drive` also run schema ensure before writing rows, so users are not forced through one specific setup command.
+- Generated schemas include status fields, unique IDs, repo/PR URL fields, task/spec relations, bug source/severity metadata, and created/updated timestamps.
+- Tightened terminal styling with quieter headings, stronger selected-row styling, and less blank-line noise after arrow-key selections.
+- Added schema-shape regression coverage and updated Notion setup docs.
+
+Follow-up fixes:
+
+- Notion relation schemas now include `type: "single_property"` and `single_property: {}`, which the 2026 API requires when creating relation properties.
+- `init` now offers to initialize git when the target project is not already a repository, with `--init-git` for non-interactive setup.
+- Codex/OpenCode and `intern_mode`/`boss_mode` are labeled as planned; init saves Claude Code + `junior_mode` as the active MVP defaults.
+
+### Step 50: Init Product Polish
+
+Improved the init experience from raw prompts into a clearer setup flow:
+
+- Added a compact ASCII build_fast wordmark for interactive init.
+- Grouped prompts into Workspace, Agent, Execution, and Quality sections.
+- Added a setup summary showing project, Notion target, and selected worker mode before checks run.
+- Replaced the final `Next:` block with a `Ready` section showing the two primary commands.
+- Kept the implementation dependency-free and covered the terminal helpers with regression tests.
+
+Follow-up polish:
+
+- Replaced the static block wordmark with a faster motion-line banner.
+- Switched primary banner/section styling from cyan-heavy output to higher-contrast white and blue accents.
+- Replaced inverse-video selected rows with blue bold rows for better readability across terminals.
+
+Second follow-up:
+
+- Switched the banner, dividers, and selected rows to an orange terminal accent.
+- Added a short TTY-only launch animation for interactive init.
+- Animation automatically falls back to static output in non-TTY/CI contexts and can be disabled with `BUILD_FAST_ANIMATION=0`.

@@ -1,6 +1,12 @@
 # Command Reference
 
-All commands are currently run through the local Node entrypoint:
+When the package is linked locally, use the CLI binary:
+
+```bash
+build_fast <command>
+```
+
+You can also run through the local Node entrypoint:
 
 ```bash
 node bin/build_fast.js <command>
@@ -9,13 +15,13 @@ node bin/build_fast.js <command>
 ## Common Commands
 
 ```bash
-node bin/build_fast.js init --ntn "$NTN" --install-qa
-node bin/build_fast.js doctor --ntn "$NTN"
-node bin/build_fast.js inspect --ntn "$NTN"
-node bin/build_fast.js status
+build_fast init --ntn "$NTN" --install-qa
+build_fast doctor --ntn "$NTN"
+build_fast inspect --ntn "$NTN"
+build_fast status
 ```
 
-`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, smart parallel settings, and browser QA. The interactive wizard uses arrow-key selectors for choices and lets you choose Claude Code, Codex, or OpenCode as the desired harness; the current MVP saves/runs Claude Code only.
+`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, smart parallel settings, and browser QA. The interactive wizard uses an orange animated banner and arrow-key selectors for choices. Claude Code and `junior_mode` are available now; Codex, OpenCode, `intern_mode`, and `boss_mode` are shown as planned and are not saved as active defaults yet. If the target Notion page is missing the build_fast schema, init creates the `Specs`, `Spec Tasks`, and `Bugs` data sources automatically unless you pass `--no-create-schema`. Pass `--init-git` to initialize a git repository non-interactively when one is missing. Set `BUILD_FAST_ANIMATION=0` to disable the banner animation.
 
 ## Goal And Planning
 
@@ -199,7 +205,7 @@ Run browser QA automatically after `drive` completes feedback checks:
 node bin/build_fast.js drive --ntn "$NTN" --qa browser
 ```
 
-When final QA fails, `drive` logs bugs, writes a JSON artifact, creates `[bug]` Spec Tasks, and syncs Notion. In `junior_mode` and `boss_mode`, it runs one automatic QA repair cycle by default, then reruns browser QA. In `intern_mode`, or with `--max-qa-repairs 0`, it stops after creating the bug tasks.
+When final QA fails, `drive` logs bugs, writes a JSON artifact, creates `[bug]` Spec Tasks, and syncs Notion. In `junior_mode`, it runs one automatic QA repair cycle by default, then reruns browser QA. With `--max-qa-repairs 0`, it stops after creating the bug tasks.
 
 The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types. If `playwright` is installed, QA also renders the page in Chromium, checks console/page errors, verifies rendered selectors/text, and runs configured interaction steps. Add `--require-playwright` to fail when Playwright is unavailable.
 
@@ -250,7 +256,7 @@ node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
 
 The bug ledger is stored at `.build_fast/specs/<target>/bugs.json`. Browser QA failure artifacts are stored at `.build_fast/specs/<target>/qa-artifacts/` and are referenced in generated bug-task prompts. Bugs can become normal Spec Tasks for repair work, and they also sync to a Notion `Bugs` data source when one is present.
 
-If the target Notion page has a `Bugs` data source, bug rows are also synced there. Required properties:
+If the target Notion page has a `Bugs` data source, bug rows are also synced there. `init`, `sync`, and `drive` can create this data source automatically on blank pages. Required properties:
 
 | Property | Type |
 | --- | --- |

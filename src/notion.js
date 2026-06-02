@@ -71,6 +71,21 @@ export class NotionClient {
     return this.request("POST", `/data_sources/${dataSourceId}/query`, body, { version: "2026-03-11" });
   }
 
+  createDatabase(parentPageId, title, properties, options = {}) {
+    return this.request("POST", "/databases", {
+      parent: {
+        type: "page_id",
+        page_id: parentPageId
+      },
+      title: [{ type: "text", text: { content: title.slice(0, 200) } }],
+      is_inline: options.inline !== false,
+      initial_data_source: {
+        title: [{ type: "text", text: { content: title.slice(0, 200) } }],
+        properties
+      }
+    }, { version: "2026-03-11" });
+  }
+
   async listBlockChildren(blockId) {
     const results = [];
     let startCursor;
