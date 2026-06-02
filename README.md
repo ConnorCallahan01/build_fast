@@ -93,6 +93,7 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 | `doctor` | Verify local tools, config, Notion token, and target page access |
 | `inspect` | Print Notion child databases/data sources and properties |
 | `goal` | Create an interactive, editable goal contract |
+| `program` | Create or drive a multi-spec phased program |
 | `plan` | Generate a repo-aware spec and task plan |
 | `sync` | Push local spec/task state to Notion |
 | `drive` | Run planning, sync, swarm, collect, checks, and final sync |
@@ -103,6 +104,8 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 | `cleanup` | Remove recorded worktrees and branches |
 | `review` | Run a Claude-backed review prompt |
 | `stop` | Mark active workers stopped in local state |
+| `ship` | Preview or apply branch/commit/push/PR handoff |
+| `workers` | List supported worker adapters |
 
 ## Notion Setup
 

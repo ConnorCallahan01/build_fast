@@ -118,6 +118,7 @@ export function printHelp() {
 Commands:
   doctor
   goal   --goal "..." --ntn <notion-url> --project <dir> --type <type> [--yes|--interactive]
+  program --goal "..." --ntn <notion-url> --project <dir> [--drive]
   plan   --goal "..." --ntn <notion-url> --project <dir> --type <type>
          [--no-agent for deterministic local planning]
          Types: feature, bug, chore (single spec)
@@ -130,11 +131,13 @@ Commands:
   status --ntn <notion-url> [--spec spec-001]
   sync   --ntn <notion-url> [--mode data-source|blocks]
   compact --ntn <notion-url> [--keep-runs 1]
-  collect --ntn <notion-url> [--task task-003] [--apply] [--force]
+  collect --ntn <notion-url> [--task task-003] [--apply] [--force] [--patch]
   cleanup --ntn <notion-url> [--task task-003] [--apply] [--force] [--branches]
   inspect --ntn <notion-url>
   stop   --ntn <notion-url>
-  review --ntn <notion-url> --type pr_readiness
+  review --ntn <notion-url> --type pr_readiness [--create-tasks]
+  ship   --ntn <notion-url> [--branch build-fast/name] [--apply] [--pr]
+  workers [--worker claude]
 
 Compatibility aliases:
   --goal implies plan

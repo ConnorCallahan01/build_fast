@@ -459,3 +459,16 @@ Fixed those issues by:
 - Tightening feedback command normalization and rejecting git inspection commands as automated feedback loops.
 
 Remaining caveat: the first live run collected some output before the overlap fix landed, so later workers recovered additively. A fresh run after the fixes generated the right program shape and completed, but we should add automated tests for overlay propagation before calling program mode production-grade.
+
+### Step 31: Power Workflow MVPs
+
+Added first-pass versions of the next high-leverage product features:
+
+- `program` command as an explicit multi-spec entrypoint.
+- Goal intake questions before contract drafting in interactive terminals.
+- `collect --patch` for patch previews before applying worktree output.
+- `review --create-tasks` to turn review findings into follow-up implementation tasks and sync them.
+- `workers` command and explicit `--worker claude` validation so unsupported adapters fail clearly.
+- `ship` dry-run/apply command for branch, commit, push, and optional draft PR creation through `gh`.
+
+These are intentionally MVP-grade surfaces. They make the workflow more powerful without changing the core Claude/worktree/Notion execution model.

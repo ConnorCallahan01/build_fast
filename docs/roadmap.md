@@ -6,7 +6,7 @@
 
 ### Better Goal Intake
 
-- Ask targeted clarifying questions before drafting a goal contract.
+- Ask targeted clarifying questions before drafting a goal contract. MVP added.
 - Add reusable question sets by work type: feature, bug, chore, refactor, review.
 - Make acceptance criteria more measurable by default.
 - Preserve the original user intent alongside the refined contract.
@@ -28,7 +28,7 @@
 ### Better Collection
 
 - Add structured summaries of file overlaps.
-- Support patch-based collection instead of whole-file copy.
+- Support patch-based collection instead of whole-file copy. MVP patch preview added.
 - Add conflict previews and merge guidance.
 - Track which completed task is the integrated candidate.
 
@@ -44,12 +44,12 @@
 ### Review Workflows
 
 - Expand review types: `pr_readiness`, `security`, `user_qa`, `regression`, `docs`.
-- Create review findings as Notion tasks.
+- Create review findings as Notion tasks. MVP local/Notion sync path added.
 - Add automated fix loops from review findings.
 
 ### GitHub Integration
 
-- Create branches and PRs from collected output.
+- Create branches and PRs from collected output. MVP `ship` preview/apply path added.
 - Link Notion specs to GitHub PRs.
 - Pull CI status back into Notion.
 - Support PR review comments as follow-up tasks.

@@ -22,6 +22,8 @@ node bin/build_fast.js goal \
 
 The CLI drafts a repo-aware contract, then asks:
 
+Before drafting, interactive terminals may ask targeted intake questions based on the work type. Use `--skip-questions` to bypass this and go straight to the goal contract.
+
 ```text
 Goal contract actions:
   a  approve and save
@@ -155,6 +157,34 @@ node bin/build_fast.js collect --ntn "$NTN" --task task-003 --apply
 ```
 
 If multiple tasks changed the same file, `collect --apply` refuses by default and prints a recommendation. You can override with `--force`, but choosing the recommended task is usually safer.
+
+Preview a patch before applying:
+
+```bash
+node bin/build_fast.js collect --ntn "$NTN" --task task-003 --patch
+```
+
+## Program Workflow
+
+Use program mode for larger goals that should become multiple specs/phases:
+
+```bash
+node bin/build_fast.js program \
+  --goal "Build the MVP in phases" \
+  --project /path/to/your/project \
+  --ntn "$NTN"
+```
+
+Then drive the program:
+
+```bash
+node bin/build_fast.js drive \
+  --ntn "$NTN" \
+  --type project \
+  --autopilot junior_mode
+```
+
+Program mode runs one dependency-ready spec at a time. Later specs receive the current target project snapshot so they can build on earlier collected output.
 
 ## Status Dashboard
 

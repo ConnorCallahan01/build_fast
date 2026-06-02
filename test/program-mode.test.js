@@ -42,6 +42,28 @@ try {
 
   const driveOutput = await cli(["drive", "--ntn", notionTarget, "--no-agent"]);
   assert.match(driveOutput, /Drive no-agent smoke complete after plan\/sync/);
+
+  const programTarget = `${notionTarget}-explicit`;
+  const programPath = path.join(root, ".build_fast", "specs", specKeyFromNotion(programTarget));
+  await rm(programPath, { recursive: true, force: true });
+  const programOutput = await cli([
+    "program",
+    "--goal", "Build a small multi-phase sample project",
+    "--project", ".",
+    "--ntn", programTarget,
+    "--no-agent"
+  ]);
+  assert.match(programOutput, /Planned 1 specs/);
+
+  await assert.rejects(
+    cli(["plan", "--goal", "Smoke", "--type", "feature", "--project", ".", "--ntn", `${notionTarget}-worker`, "--worker", "codex", "--no-agent"]),
+    /Unsupported worker adapter: codex/
+  );
+
+  const shipOutput = await cli(["ship", "--ntn", notionTarget, "--branch", "build-fast/test-branch"]);
+  assert.match(shipOutput, /Ship preview/);
+  assert.match(shipOutput, /Dry run only/);
+  await rm(programPath, { recursive: true, force: true });
 } finally {
   await rm(specPath, { recursive: true, force: true });
 }

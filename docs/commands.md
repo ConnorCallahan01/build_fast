@@ -40,6 +40,29 @@ Useful flags:
 | `--no-agent` | Use deterministic local planning where supported |
 | `--type` | Goal/spec type, such as `feature`, `bug`, `chore`, or `refactor` |
 | `--project` | Target project directory |
+| `--skip-questions` | Skip goal intake questions in interactive mode |
+
+## Program Mode
+
+Use `program` for larger goals that should be split into multiple specs/phases:
+
+```bash
+node bin/build_fast.js program \
+  --goal "..." \
+  --ntn "$NTN" \
+  --project /path/to/your/project
+```
+
+Drive a program directly:
+
+```bash
+node bin/build_fast.js program \
+  --goal "..." \
+  --ntn "$NTN" \
+  --project /path/to/your/project \
+  --drive \
+  --autopilot junior_mode
+```
 
 ## Full Loop
 
@@ -82,6 +105,12 @@ Dry run:
 node bin/build_fast.js collect --ntn "$NTN"
 ```
 
+Patch preview:
+
+```bash
+node bin/build_fast.js collect --ntn "$NTN" --task task-003 --patch
+```
+
 Apply a task:
 
 ```bash
@@ -108,4 +137,33 @@ node bin/build_fast.js stop --ntn "$NTN"
 node bin/build_fast.js review --ntn "$NTN" --type pr_readiness
 ```
 
-Review support is still basic. Integration review is a planned improvement.
+Create follow-up tasks from review findings:
+
+```bash
+node bin/build_fast.js review --ntn "$NTN" --type pr_readiness --create-tasks
+```
+
+## Workers
+
+```bash
+node bin/build_fast.js workers
+node bin/build_fast.js drive --ntn "$NTN" --from-goal --worker claude
+```
+
+Claude Code is the only supported adapter today. Unsupported adapters fail clearly.
+
+## Ship Preview
+
+Preview branch/commit/push commands:
+
+```bash
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature
+```
+
+Apply the branch/commit/push flow:
+
+```bash
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply
+```
+
+Add `--pr` to attempt draft PR creation through `gh`.

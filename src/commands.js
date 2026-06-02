@@ -20,6 +20,8 @@ export async function dispatch(command, flags) {
       return doctor(flags);
     case "goal":
       return goal(flags);
+    case "program":
+      return program(flags);
     case "plan":
     case "tasks":
       return plan(flags);
@@ -49,6 +51,10 @@ export async function dispatch(command, flags) {
       return stop(flags);
     case "review":
       return review(flags);
+    case "ship":
+      return ship(flags);
+    case "workers":
+      return workers(flags);
     case "help":
     default:
       printHelp();
@@ -90,12 +96,14 @@ async function goal(flags) {
   const type = optionalString(flags, "type", "feature");
   const project = normalizeProject(optionalString(flags, "project", process.cwd()));
   const repoContext = await scanRepo(project);
+  const intake = await collectGoalIntake({ flags, rawGoal, type, project, repoContext });
+  const shapedGoal = formatGoalWithIntake(rawGoal, intake);
 
   let contract;
   if (flags["no-agent"]) {
-    contract = normalizeGoalContract(null, rawGoal, repoContext);
+    contract = normalizeGoalContract(null, shapedGoal, repoContext);
   } else {
-    const prompt = await renderPrompt("goal.md", { goal: rawGoal, type, project, notionUrl, repoContext });
+    const prompt = await renderPrompt("goal.md", { goal: shapedGoal, type, project, notionUrl, repoContext, intake });
     const runDir = path.join(process.cwd(), ".build_fast", "goals", `${Date.now()}`);
     await writeJson(path.join(runDir, "repo-context.json"), repoContext);
     const result = await runClaude({
@@ -106,12 +114,13 @@ async function goal(flags) {
       autopilot: "intern_mode",
       permissionProfile: "inherit"
     });
-    contract = normalizeGoalContract(result.parsed, rawGoal, repoContext);
+    contract = normalizeGoalContract(result.parsed, shapedGoal, repoContext);
   }
 
   const saved = {
     ...contract,
     rawGoal,
+    intake,
     type,
     project,
     notionUrl,
@@ -131,6 +140,84 @@ async function goal(flags) {
   await writeJson(goalPath(config, notionUrl), finalContract);
   console.log(`\nSaved goal contract: ${path.relative(process.cwd(), goalPath(config, notionUrl))}`);
   console.log(`Run it with: node bin/build_fast.js drive --ntn <page> --from-goal --autopilot junior_mode --permission-profile managed`);
+}
+
+async function program(flags) {
+  if (flags.drive || flags.go || flags.run) {
+    return drive({ ...flags, type: optionalString(flags, "type", "project") });
+  }
+  return plan({ ...flags, type: optionalString(flags, "type", "project") });
+}
+
+async function collectGoalIntake({ flags, rawGoal, type, project, repoContext }) {
+  if (flags["skip-questions"] || flags.yes || flags.y || flags["non-interactive"] || flags["no-interactive"]) return [];
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return [];
+
+  const questions = goalIntakeQuestions(type, repoContext).slice(0, 5);
+  if (!questions.length) return [];
+
+  console.log("\nGoal intake questions");
+  console.log("Press Enter to skip a question.");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answers = [];
+  try {
+    for (const question of questions) {
+      const answer = (await rl.question(`${question} `)).trim();
+      if (answer) answers.push({ question, answer });
+    }
+  } finally {
+    rl.close();
+  }
+  return answers;
+}
+
+function goalIntakeQuestions(type, repoContext) {
+  const normalizedType = String(type || "feature").toLowerCase();
+  const checks = repoContext?.detected?.feedbackLoops?.length ? repoContext.detected.feedbackLoops.join(", ") : "the project checks";
+  const common = [
+    "What should be explicitly out of scope?",
+    `What command or behavior proves this is done? Detected checks: ${checks}.`
+  ];
+  if (normalizedType === "bug") {
+    return [
+      "What is the expected behavior?",
+      "What is the actual broken behavior?",
+      "What reproduction steps or failing case should the agent use?",
+      ...common
+    ];
+  }
+  if (normalizedType === "refactor") {
+    return [
+      "What behavior must remain unchanged?",
+      "What code areas should be targeted?",
+      "What code areas should not be touched?",
+      ...common
+    ];
+  }
+  if (isMultiSpecType(normalizedType)) {
+    return [
+      "What is the smallest useful first phase?",
+      "What milestones or phases do you already have in mind?",
+      "Should the CLI pause for approval between phases?",
+      ...common
+    ];
+  }
+  return [
+    "Who or what is the primary user of this change?",
+    "What is the most important visible behavior to add or change?",
+    "Are there any edge cases the agents must handle?",
+    ...common
+  ];
+}
+
+function formatGoalWithIntake(rawGoal, intake = []) {
+  if (!intake.length) return rawGoal;
+  return [
+    rawGoal,
+    "",
+    "User clarification answers:",
+    ...intake.map((item) => `- ${item.question} ${item.answer}`)
+  ].join("\n");
 }
 
 async function confirmGoalContract(contract, flags) {
@@ -262,6 +349,7 @@ async function loadGoalContract(config, notionUrl) {
 
 async function plan(flags) {
   const config = await ensureConfig();
+  validateWorkerFlag(flags);
   const notionUrl = requireFlag(flags, "ntn");
   const type = optionalString(flags, "type", "feature");
   const project = normalizeProject(optionalString(flags, "project", process.cwd()));
@@ -402,6 +490,7 @@ function normalizePlan(parsed, goal, repoContext = undefined) {
 
 async function run(flags) {
   const config = await loadConfig();
+  validateWorkerFlag(flags);
   const notionUrl = requireFlag(flags, "ntn");
   const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot);
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "inherit");
@@ -456,6 +545,7 @@ async function run(flags) {
 }
 
 async function drive(flags) {
+  validateWorkerFlag(flags);
   const notionUrl = requireFlag(flags, "ntn");
   const autopilot = optionalString(flags, "autopilot", "junior_mode");
   const permissionProfile = optionalString(flags, "permission-profile", "managed");
@@ -758,8 +848,16 @@ function isRunnableFeedbackCommand(command) {
   return ["npm", "node", "git", "npx", "pnpm", "yarn", "cargo", "python", "python3", "pytest", "go", "make"].includes(executable);
 }
 
+function validateWorkerFlag(flags) {
+  const worker = optionalString(flags, "worker", "claude");
+  if (worker !== "claude") {
+    throw new Error(`Unsupported worker adapter: ${worker}. Current MVP supports --worker claude only.`);
+  }
+}
+
 async function swarm(flags) {
   const config = await loadConfig();
+  validateWorkerFlag(flags);
   const notionUrl = requireFlag(flags, "ntn");
   const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot);
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "inherit");
@@ -1290,27 +1388,33 @@ async function collect(flags) {
   const notionUrl = requireFlag(flags, "ntn");
   const apply = flags.apply === true || flags.apply === "true";
   const force = flags.force === true || flags.force === "true";
+  const patch = flags.patch === true || flags.patch === "true";
   const taskFilter = optionalString(flags, "task", undefined);
 
   const program = await loadProgram(config, notionUrl);
   if (program) {
     let spec = await loadSpec(config, notionUrl);
     if (!spec) throw new Error("No active spec found in program drive. Run drive first.");
-    return collectSpec({ config, notionUrl, spec, apply, force, taskFilter });
+    return collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter });
   }
 
   let spec = await loadSpec(config, notionUrl);
   if (!spec) throw new Error("No local spec found. Run plan first.");
-  return collectSpec({ config, notionUrl, spec, apply, force, taskFilter });
+  return collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter });
 }
 
-async function collectSpec({ config, notionUrl, spec, apply, force, taskFilter }) {
+async function collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter }) {
   const projectRoot = spec.project;
   const projectSubdir = normalizeProjectSubdir(spec.repoContext?.projectRelativePath);
   const { reports, overlaps, recommendation } = await collectSummary(config, notionUrl, spec, taskFilter);
 
   if (!reports.length) {
     console.log("No completed worktree-backed tasks found to collect.");
+    return;
+  }
+
+  if (patch) {
+    await printCollectPatches(reports, projectRoot, projectSubdir);
     return;
   }
 
@@ -1360,6 +1464,33 @@ async function collectSpec({ config, notionUrl, spec, apply, force, taskFilter }
         console.log(`Apply with: node bin/build_fast.js collect --ntn <page> --task ${recommendation.task.id} --apply`);
       }
     }
+  }
+}
+
+async function printCollectPatches(reports, projectRoot, projectSubdir) {
+  for (const report of reports) {
+    const worktreeProjectDir = projectSubdir ? path.join(report.worktree, projectSubdir) : report.worktree;
+    console.log(`diff for ${report.task.id}: ${report.task.title}`);
+    for (const file of report.changedFiles) {
+      const targetPath = path.join(projectRoot, file);
+      const sourcePath = path.join(worktreeProjectDir, file);
+      const diff = await diffFilesForPreview(targetPath, sourcePath, file);
+      console.log(diff || `# ${file}: no textual diff available`);
+    }
+  }
+}
+
+async function diffFilesForPreview(targetPath, sourcePath, label) {
+  try {
+    const { stdout } = await execFileAsync("git", ["diff", "--no-index", "--", targetPath, sourcePath], {
+      timeout: 30000,
+      maxBuffer: 1024 * 1024
+    });
+    return stdout.replaceAll(targetPath, `a/${label}`).replaceAll(sourcePath, `b/${label}`);
+  } catch (error) {
+    const output = error.stdout || "";
+    if (output) return output.replaceAll(targetPath, `a/${label}`).replaceAll(sourcePath, `b/${label}`);
+    return "";
   }
 }
 
@@ -2075,7 +2206,132 @@ async function review(flags) {
   });
   await finishRun(dir, { status: result.code === 0 ? "completed" : "failed", result: result.parsed, exitCode: result.code });
   await writeToNotion(config, notionUrl, `## build_fast Review: ${reviewType}\n\n${result.parsed?.summary || result.stdout || result.stderr}`, { label: `review ${reviewType}` });
+  if (flags["create-tasks"] || flags["tasks"]) {
+    const nextSpec = addReviewTasks(spec, result.parsed, reviewType);
+    if (nextSpec.tasks.length !== spec.tasks.length) {
+      await saveSpec(config, notionUrl, nextSpec);
+      await sync({ ntn: notionUrl });
+      console.log(`Created ${nextSpec.tasks.length - spec.tasks.length} follow-up task${nextSpec.tasks.length - spec.tasks.length === 1 ? "" : "s"} from review findings.`);
+    } else {
+      console.log("No review findings available for follow-up task creation.");
+    }
+  }
   console.log(result.parsed?.summary || result.stdout || result.stderr);
+}
+
+function addReviewTasks(spec, parsed = {}, reviewType) {
+  const findings = Array.isArray(parsed?.findings) ? parsed.findings : [];
+  if (!findings.length) return spec;
+  const existingIds = new Set((spec.tasks || []).map((task) => task.id));
+  let nextIndex = (spec.tasks || []).length + 1;
+  const tasks = [...(spec.tasks || [])];
+  for (const finding of findings) {
+    while (existingIds.has(`task-${String(nextIndex).padStart(3, "0")}`)) nextIndex += 1;
+    const id = `task-${String(nextIndex).padStart(3, "0")}`;
+    existingIds.add(id);
+    nextIndex += 1;
+    const severity = finding.severity || "P3";
+    const title = finding.title || "Address review finding";
+    tasks.push({
+      id,
+      title: `[${reviewType}] ${severity}: ${title}`,
+      status: "pending",
+      order: tasks.length + 1,
+      objective: finding.details || title,
+      instructions: [
+        finding.recommendation || "Address the review finding.",
+        finding.file ? `Relevant file: ${finding.file}` : null
+      ].filter(Boolean).join("\n"),
+      acceptanceCriteria: [
+        "The review finding is addressed.",
+        "Relevant checks pass.",
+        "No unrelated behavior is changed."
+      ],
+      testPlan: spec.feedbackLoops?.length ? spec.feedbackLoops : spec.repoContext?.feedbackLoops || ["Run the relevant project checks."],
+      risk: severity === "P0" || severity === "P1" ? "high" : severity === "P2" ? "medium" : "low",
+      dependencies: []
+    });
+  }
+  return { ...spec, tasks, status: spec.status === "completed" ? "planned" : spec.status, updatedAt: nowIso() };
+}
+
+async function workers(flags) {
+  const config = await loadConfig();
+  const requested = optionalString(flags, "worker", config.defaultAgent || "claude");
+  const supported = ["claude"];
+  console.log("Worker adapters");
+  for (const worker of supported) {
+    const selected = worker === requested ? " (selected)" : "";
+    console.log(`- ${worker}${selected}`);
+  }
+  if (!supported.includes(requested)) {
+    console.log(`Unsupported worker: ${requested}`);
+    console.log("Current MVP supports Claude Code only. Codex/OpenCode adapters are planned.");
+  }
+}
+
+async function ship(flags) {
+  const config = await loadConfig();
+  const notionUrl = requireFlag(flags, "ntn");
+  const spec = await loadSpec(config, notionUrl);
+  const program = await loadProgram(config, notionUrl);
+  const target = spec || (program ? programToStandaloneSpec(program, program.specs.at(-1)) : undefined);
+  if (!target) throw new Error("No local spec or program found. Run plan/drive first.");
+
+  const projectRoot = await resolveGitRoot(target.project);
+  const branch = optionalString(flags, "branch", `build-fast/${target.slug || "changes"}`);
+  const message = optionalString(flags, "message", `build_fast: ${target.title}`);
+  const apply = flags.apply === true || flags.apply === "true";
+  const createPr = flags.pr === true || flags.pr === "true";
+
+  if (!apply) {
+    console.log("Ship preview");
+    console.log(`Project git root: ${projectRoot}`);
+    console.log(`Branch: ${branch}`);
+    console.log(`Commit message: ${message}`);
+    console.log("Commands:");
+    console.log(`  git -C ${projectRoot} switch -c ${branch}`);
+    console.log(`  git -C ${projectRoot} add ${target.project}`);
+    console.log(`  git -C ${projectRoot} commit -m ${JSON.stringify(message)}`);
+    console.log(`  git -C ${projectRoot} push -u origin ${branch}`);
+    if (createPr) console.log(`  gh pr create --draft --title ${JSON.stringify(target.title)} --body <generated body>`);
+    console.log("Dry run only. Rerun with --apply to create branch/commit/push.");
+    return;
+  }
+
+  await git(["-C", projectRoot, "switch", "-c", branch]);
+  await git(["-C", projectRoot, "add", target.project]);
+  await git(["-C", projectRoot, "commit", "-m", message]);
+  await git(["-C", projectRoot, "push", "-u", "origin", branch]);
+  console.log(`Pushed ${branch}.`);
+
+  if (createPr) {
+    const body = shipPrBody(target);
+    try {
+      const { stdout } = await execFileAsync("gh", ["pr", "create", "--draft", "--title", target.title, "--body", body], {
+        cwd: projectRoot,
+        timeout: 30000
+      });
+      console.log(stdout.trim());
+    } catch (error) {
+      console.log(`PR creation skipped: ${firstOutputLine(error.stderr || error.stdout || error.message)}`);
+    }
+  }
+}
+
+function shipPrBody(spec) {
+  const tasks = (spec.tasks || []).map((task) => `- ${task.status}: ${task.id} ${task.title}`).join("\n") || "- No tasks recorded.";
+  return [
+    `Spec: ${spec.title}`,
+    "",
+    "Goal:",
+    spec.goal,
+    "",
+    "Tasks:",
+    tasks,
+    "",
+    "Generated by build_fast."
+  ].join("\n");
 }
 
 async function writeToNotion(config, notionUrl, markdown, options = {}) {
