@@ -208,6 +208,14 @@ node bin/build_fast.js drive \
 
 In smart mode, planners include `expectedFiles` and `parallelGroup` hints. `swarm` uses those hints plus file/area heuristics to defer risky, high-risk, serial, or overlapping tasks. If completed parallel workers still overlap, `drive` creates a serial integration task so a fresh worker can merge the outputs deliberately.
 
+Preview the orchestration before launching workers:
+
+```bash
+node bin/build_fast.js drive --ntn "$NTN" --dry-run --parallel smart --concurrency 4 --max-tasks 4
+```
+
+The dry run prints plan-quality warnings, selected/deferred smart-parallel tasks, feedback checks, browser QA settings, and repair limits without syncing Notion or starting agents. `parallelGroup: "serial"` still forces one-at-a-time execution; other group names are treated as hints, so independent tasks with different groups can run together when their expected files do not overlap.
+
 ## Ship To GitHub
 
 Preview the release handoff first:

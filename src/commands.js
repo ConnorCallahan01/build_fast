@@ -559,6 +559,7 @@ async function drive(flags) {
   const concurrency = optionalString(flags, "concurrency", "2");
   const maxTasks = optionalString(flags, "max-tasks", concurrency);
   const parallel = optionalString(flags, "parallel", "default");
+  const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
 
   let config = await ensureConfig();
   const goalContract = flags["from-goal"] ? await loadGoalContract(config, notionUrl) : undefined;
@@ -585,6 +586,12 @@ async function drive(flags) {
     spec = await loadSpec(config, notionUrl);
   }
 
+  if (dryRun) {
+    await printDriveDryRun({ target: spec, flags, autopilot, permissionProfile, concurrency, maxTasks, parallel });
+    return;
+  }
+
+  enforcePlanQuality(spec, flags);
   await sync({ ntn: notionUrl });
   if (flags["no-agent"]) {
     console.log("Drive no-agent smoke complete after plan/sync.");
@@ -658,6 +665,7 @@ async function drive(flags) {
 }
 
 async function driveProgram({ config, notionUrl, goal, type, goalContract, flags, autopilot, permissionProfile, concurrency, maxTasks }) {
+  const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
   let program = await loadProgram(config, notionUrl);
   if (!program || (goal && goal !== program.goal)) {
     if (!goal) throw new Error("No local program found. Pass --goal, use --from-goal, or run plan first.");
@@ -671,6 +679,12 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
     program = await loadProgram(config, notionUrl);
   }
 
+  if (dryRun) {
+    await printDriveDryRun({ target: program, flags, autopilot, permissionProfile, concurrency, maxTasks, parallel: optionalString(flags, "parallel", "default") });
+    return;
+  }
+
+  enforcePlanQuality(program, flags);
   const completedAtStart = programComplete(program);
   if (!completedAtStart) await syncProgram({ config, notionUrl, program });
   if (flags["no-agent"]) {
@@ -816,6 +830,121 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
   if (await runDriveQaFinalPass({ config, notionUrl, target: programToStandaloneSpec(program, program.specs.at(-1)), flags, autopilot, permissionProfile, concurrency, maxTasks })) return;
 
   console.log("Drive complete. All specs shipped.");
+}
+
+async function printDriveDryRun({ target, flags, autopilot, permissionProfile, concurrency, maxTasks, parallel }) {
+  const quality = validatePlanQuality(target);
+  const isProgram = Array.isArray(target.specs);
+  const qa = optionalString(flags, "qa", "");
+  const maxIterations = optionalString(flags, "max-iterations", "20");
+  const maxQaRepairs = optionalString(flags, "max-qa-repairs", driveShouldAutoRepairQa(autopilot) ? "1" : "0");
+
+  console.log("Drive dry run");
+  console.log(`Mode: ${isProgram ? "program" : "spec"}`);
+  console.log(`Title: ${target.title}`);
+  console.log(`Project: ${target.project}`);
+  console.log(`Autopilot: ${autopilot}`);
+  console.log(`Permission profile: ${permissionProfile}`);
+  console.log(`Parallel: ${parallel}`);
+  console.log(`Concurrency: ${concurrency}`);
+  console.log(`Max tasks per swarm: ${maxTasks}`);
+  console.log(`Max iterations: ${maxIterations}`);
+  console.log(`QA: ${qa || "none"}`);
+  if (qa) console.log(`Max QA repairs: ${maxQaRepairs}`);
+  printPlanQuality(quality);
+
+  const specs = isProgram ? target.specs : [target];
+  for (const spec of specs) {
+    const standalone = isProgram ? programToStandaloneSpec(target, spec) : spec;
+    const counts = taskCounts(standalone);
+    const ready = readyPendingTasks(standalone);
+    const candidates = selectSwarmCandidates(standalone, { maxTasks: Number(maxTasks), parallelMode: parallel });
+    const smart = parallel === "smart" ? analyzeSmartParallelSelection(ready, Number(maxTasks)) : undefined;
+    const depLabel = spec.dependencies?.length ? ` depends=[${spec.dependencies.join(", ")}]` : "";
+
+    console.log("");
+    console.log(`${isProgram ? spec.id : "Spec"}: ${spec.title} [${spec.status}]${depLabel}`);
+    console.log(`Tasks: ${counts.completed}/${counts.total} completed, ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.failed} failed`);
+    if (standalone.feedbackLoops?.length || standalone.repoContext?.feedbackLoops?.length) {
+      const loops = [...new Set([...(standalone.feedbackLoops || []), ...(standalone.repoContext?.feedbackLoops || [])])];
+      console.log(`Feedback: ${loops.join(" | ")}`);
+    }
+    if (standalone.browserQa) console.log(`Browser QA: ${browserQaStatusLine(standalone.browserQa)}`);
+    if (!ready.length) {
+      console.log("Next swarm: no dependency-ready pending tasks");
+      continue;
+    }
+    console.log(`Next swarm: ${candidates.length} task${candidates.length === 1 ? "" : "s"} would run`);
+    if (parallel === "smart" && smart) {
+      printSmartParallelAnalysis(smart, "  ");
+    } else {
+      for (const task of candidates) console.log(`  selected ${task.id}: ${task.title}`);
+    }
+  }
+
+  if ((quality.errors.length || quality.warnings.length) && (flags["strict-plan"] === true || flags["strict-plan"] === "true")) {
+    throw new Error("Drive dry run found plan quality issues.");
+  }
+  console.log("");
+  console.log("Dry run only. No sync, workers, collection, feedback checks, QA, or Notion updates were run.");
+}
+
+function validatePlanQuality(target) {
+  const errors = [];
+  const warnings = [];
+  const isProgram = Array.isArray(target.specs);
+  const specs = isProgram ? target.specs.map((spec) => programToStandaloneSpec(target, spec)) : [target];
+
+  if (!target.project) errors.push("Missing project path.");
+  if (!target.goal) warnings.push("Missing original goal text.");
+
+  for (const spec of specs) {
+    const label = isProgram ? spec._program?.specId || spec.id : "spec";
+    if (!spec.tasks?.length) errors.push(`${label}: no tasks planned.`);
+    if (!spec.feedbackLoops?.length && !spec.repoContext?.feedbackLoops?.length) warnings.push(`${label}: no automated feedback checks recorded.`);
+    for (const task of spec.tasks || []) {
+      const taskLabel = `${label}/${task.id}`;
+      if (!task.title) errors.push(`${taskLabel}: missing title.`);
+      if (!task.objective) warnings.push(`${taskLabel}: missing objective.`);
+      if (!task.acceptanceCriteria?.length) warnings.push(`${taskLabel}: missing acceptance criteria.`);
+      if (!task.testPlan?.length) warnings.push(`${taskLabel}: missing test plan.`);
+      if (!task.expectedFiles?.length && !task.targetFiles?.length && !task.files?.length) {
+        warnings.push(`${taskLabel}: missing expectedFiles hint; smart parallel may serialize or guess conservatively.`);
+      }
+      for (const dependency of task.dependencies || []) {
+        if (!(spec.tasks || []).some((candidate) => candidate.id === dependency)) errors.push(`${taskLabel}: unknown dependency ${dependency}.`);
+      }
+      if (isRunnableTaskVerifier(task) && !task.testPlan?.some((command) => normalizeFeedbackCommand(command))) {
+        warnings.push(`${taskLabel}: verification task has no runnable automated check.`);
+      }
+    }
+  }
+
+  return { errors, warnings };
+}
+
+function isRunnableTaskVerifier(task) {
+  const text = `${task.kind || ""} ${task.title || ""} ${task.objective || ""}`.toLowerCase();
+  return /\b(test|verify|verification|qa|regression|review)\b/.test(text);
+}
+
+function enforcePlanQuality(target, flags) {
+  const quality = validatePlanQuality(target);
+  if (!quality.errors.length && !quality.warnings.length) return;
+  printPlanQuality(quality);
+  if (quality.errors.length || flags["strict-plan"] === true || flags["strict-plan"] === "true") {
+    throw new Error("Plan quality gate failed. Run `drive --dry-run` to inspect the plan before launching workers.");
+  }
+}
+
+function printPlanQuality({ errors, warnings }) {
+  console.log("Plan quality:");
+  if (!errors.length && !warnings.length) {
+    console.log("  OK");
+    return;
+  }
+  for (const error of errors) console.log(`  ERR ${error}`);
+  for (const warning of warnings) console.log(`  WARN ${warning}`);
 }
 
 function programComplete(program) {
@@ -1212,6 +1341,7 @@ async function swarm(flags) {
     console.log("No dependency-ready pending tasks found.");
     return;
   }
+  const smartAnalysis = parallelMode === "smart" ? analyzeSmartParallelSelection(readyPendingTasks(spec), maxTasks) : undefined;
 
   const gitContext = await resolveGitContext(spec.project);
   const assignments = [];
@@ -1237,7 +1367,10 @@ async function swarm(flags) {
   await saveSpec(config, notionUrl, spec);
 
   console.log(`Swarm starting ${assignments.length} task${assignments.length === 1 ? "" : "s"} with concurrency ${concurrency}.`);
-  if (parallelMode === "smart") printSmartParallelPlan(spec, candidates);
+  if (parallelMode === "smart") {
+    console.log("Smart parallel selection:");
+    printSmartParallelAnalysis({ ...smartAnalysis, selected: candidates }, "  ");
+  }
   const results = await runWithConcurrency(assignments, concurrency, (assignment) =>
     runSwarmAssignment({ config, notionUrl, autopilot, permissionProfile, assignment })
   );
@@ -1278,38 +1411,56 @@ async function swarm(flags) {
 export function selectSwarmCandidates(spec, { maxTasks, parallelMode = "default" }) {
   const ready = readyPendingTasks(spec);
   if (parallelMode !== "smart") return ready.slice(0, maxTasks);
-  return selectSmartParallelTasks(ready, maxTasks);
+  return analyzeSmartParallelSelection(ready, maxTasks).selected;
 }
 
-function selectSmartParallelTasks(ready, maxTasks) {
-  if (!ready.length) return [];
+export function analyzeSmartParallelSelection(ready, maxTasks) {
+  if (!ready.length) return { selected: [], deferred: [] };
   const first = ready[0];
-  if (isSerialTask(first)) return [first];
+  if (isSerialTask(first)) {
+    return {
+      selected: [first],
+      deferred: ready.slice(1).map((task) => ({
+        task,
+        reason: `blocked behind serial first task ${first.id}`
+      }))
+    };
+  }
 
   const selected = [first];
+  const deferred = [];
   for (const task of ready.slice(1)) {
-    if (selected.length >= maxTasks) break;
-    if (isSerialTask(task)) break;
-    if (selected.every((candidate) => tasksCanRunTogether(candidate, task))) {
+    if (selected.length >= maxTasks) {
+      deferred.push({ task, reason: `max-tasks limit ${maxTasks} reached` });
+      continue;
+    }
+    if (isSerialTask(task)) {
+      deferred.push({ task, reason: "task is serial/high-risk/integration/verification/repair work" });
+      continue;
+    }
+    const blocker = selected.map((candidate) => taskParallelBlocker(candidate, task)).find(Boolean);
+    if (!blocker) {
       selected.push(task);
+    } else {
+      deferred.push({ task, reason: blocker });
     }
   }
-  return selected;
+  return { selected, deferred };
 }
 
-function tasksCanRunTogether(a, b) {
+function taskParallelBlocker(a, b) {
   const aGroup = normalizedParallelGroup(a);
   const bGroup = normalizedParallelGroup(b);
-  if (aGroup && bGroup && aGroup !== bGroup) return false;
 
   const aFiles = taskExpectedFiles(a);
   const bFiles = taskExpectedFiles(b);
-  if (aFiles.length && bFiles.length && fileSetsOverlap(aFiles, bFiles)) return false;
+  if (aFiles.length && bFiles.length && fileSetsOverlap(aFiles, bFiles)) return `expected files overlap with ${a.id}`;
 
   const aArea = taskArea(a);
   const bArea = taskArea(b);
-  if (!aFiles.length && !bFiles.length && aArea && bArea && aArea === bArea) return false;
-  return true;
+  if (!aFiles.length && !bFiles.length && aArea && bArea && aArea === bArea) return `same inferred area as ${a.id} with no expectedFiles hints`;
+  if (!aFiles.length && !bFiles.length && aGroup && bGroup && aGroup === bGroup) return `same parallelGroup as ${a.id} with no expectedFiles hints`;
+  return "";
 }
 
 function isSerialTask(task) {
@@ -1374,15 +1525,17 @@ function taskArea(task) {
   return "";
 }
 
-function printSmartParallelPlan(spec, candidates) {
-  console.log("Smart parallel selection:");
-  for (const task of candidates) {
+function printSmartParallelAnalysis(analysis, indent = "") {
+  for (const task of analysis.selected) {
     const files = taskExpectedFiles(task);
     const group = normalizedParallelGroup(task) || "auto";
-    console.log(`  ${task.id}: group=${group} risk=${task.risk || "medium"} files=${files.length ? files.join(", ") : "unknown"}`);
+    console.log(`${indent}selected ${task.id}: group=${group} risk=${task.risk || "medium"} files=${files.length ? files.join(", ") : "unknown"} title=${task.title}`);
   }
-  const skipped = readyPendingTasks(spec).filter((task) => !candidates.some((candidate) => candidate.id === task.id));
-  if (skipped.length) console.log(`  deferred: ${skipped.map((task) => task.id).join(", ")}`);
+  for (const item of analysis.deferred) {
+    const files = taskExpectedFiles(item.task);
+    const group = normalizedParallelGroup(item.task) || "auto";
+    console.log(`${indent}deferred ${item.task.id}: ${item.reason}; group=${group} files=${files.length ? files.join(", ") : "unknown"} title=${item.task.title}`);
+  }
 }
 
 async function runSwarmAssignment({ config, notionUrl, autopilot, permissionProfile, assignment }) {

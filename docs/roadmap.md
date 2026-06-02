@@ -17,7 +17,7 @@
 - Generate task dependencies more reliably.
 - Add expected-file and parallel-group hints for workers. MVP added.
 - Add explicit integration tasks when parallel workers touch shared files. MVP added for smart parallel mode.
-- Add plan quality checks before workers start.
+- Add plan quality checks before workers start. MVP warnings/errors added with `drive --dry-run` and `--strict-plan`.
 
 ### Safer Drive Mode
 
@@ -29,7 +29,7 @@
 - Sync bug ledger entries into a Notion `Bugs` data source when present. MVP added.
 - Run final-pass bug workers automatically at the end of `drive`. MVP added for browser QA in `junior_mode`/`boss_mode`.
 - Add clearer recovery commands after partial drive runs.
-- Add a `--dry-run` preview for drive orchestration.
+- Add a `--dry-run` preview for drive orchestration. MVP added.
 
 ### Browser QA
 

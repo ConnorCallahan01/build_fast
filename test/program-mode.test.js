@@ -43,6 +43,12 @@ try {
   const driveOutput = await cli(["drive", "--ntn", notionTarget, "--no-agent"]);
   assert.match(driveOutput, /Drive no-agent smoke complete after plan\/sync/);
 
+  const dryRunOutput = await cli(["drive", "--ntn", notionTarget, "--dry-run", "--parallel", "smart", "--concurrency", "2", "--max-tasks", "2"]);
+  assert.match(dryRunOutput, /Drive dry run/);
+  assert.match(dryRunOutput, /Plan quality:/);
+  assert.match(dryRunOutput, /Next swarm:/);
+  assert.match(dryRunOutput, /Dry run only/);
+
   const programTarget = `${notionTarget}-explicit`;
   const programPath = path.join(root, ".build_fast", "specs", specKeyFromNotion(programTarget));
   await rm(programPath, { recursive: true, force: true });

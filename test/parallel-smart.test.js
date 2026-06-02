@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { addParallelIntegrationTask, selectSwarmCandidates } from "../src/commands.js";
+import { addParallelIntegrationTask, analyzeSmartParallelSelection, selectSwarmCandidates } from "../src/commands.js";
 
 const baseTask = {
   status: "pending",
@@ -39,6 +39,19 @@ const spec = {
 
 const smart = selectSwarmCandidates(spec, { maxTasks: 3, parallelMode: "smart" });
 assert.deepEqual(smart.map((task) => task.id), ["task-001", "task-002"]);
+
+const differentGroups = selectSwarmCandidates({
+  tasks: [
+    { ...baseTask, id: "task-001", order: 1, title: "Update docs", expectedFiles: ["README.md"], parallelGroup: "docs" },
+    { ...baseTask, id: "task-002", order: 2, title: "Update browser styles", expectedFiles: ["demo/styles.css"], parallelGroup: "ui" }
+  ]
+}, { maxTasks: 2, parallelMode: "smart" });
+assert.deepEqual(differentGroups.map((task) => task.id), ["task-001", "task-002"]);
+
+const analysis = analyzeSmartParallelSelection(spec.tasks, 3);
+assert.deepEqual(analysis.selected.map((task) => task.id), ["task-001", "task-002"]);
+assert.equal(analysis.deferred[0].task.id, "task-003");
+assert.match(analysis.deferred[0].reason, /expected files overlap/);
 
 const defaultMode = selectSwarmCandidates(spec, { maxTasks: 3, parallelMode: "default" });
 assert.deepEqual(defaultMode.map((task) => task.id), ["task-001", "task-002", "task-003"]);

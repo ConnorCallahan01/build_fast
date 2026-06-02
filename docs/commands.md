@@ -85,7 +85,9 @@ Useful drive flags:
 | `--max-repairs` | Maximum feedback repair tasks per spec, default `2` |
 | `--max-qa-repairs` | Maximum final browser QA repair cycles, default `1`; use `0` to only create bug tasks |
 | `--worker claude` | Select the current worker adapter |
-| `--parallel smart` | Group ready tasks conservatively using expected files, parallel groups, risk, and task type |
+| `--parallel smart` | Group ready tasks conservatively using expected files, serial hints, risk, and task type |
+| `--dry-run` | Preview orchestration, plan quality, selected tasks, deferred tasks, feedback checks, and QA settings without syncing or running workers |
+| `--strict-plan` | Treat plan-quality warnings as blockers before launching workers |
 | `--qa browser` | Run browser QA as the final drive pass; failures become bug-fix tasks |
 
 You can also drive directly from a goal string:
@@ -110,7 +112,7 @@ node bin/build_fast.js swarm \
   --permission-profile managed
 ```
 
-`--parallel smart` only changes which ready tasks are selected for a swarm batch. It does not change the worker runtime. Smart mode defers serial/high-risk/integration tasks, avoids known expected-file overlaps, and prints the selected group before workers start.
+`--parallel smart` only changes which ready tasks are selected for a swarm batch. It does not change the worker runtime. Smart mode defers serial/high-risk/integration tasks, avoids known expected-file overlaps, and prints selected/deferred reasons before workers start. `parallelGroup: "serial"` forces serialization; other group names are treated as planner hints, not automatic blockers, so independent tasks with different groups can still run together.
 
 ## Collect Output
 

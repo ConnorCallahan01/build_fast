@@ -618,3 +618,14 @@ Improved the `ship` workflow so GitHub review handoff carries the context accumu
 - Added `--ready` for creating non-draft PRs; draft remains the default.
 - Ship metadata now records staged changed files.
 - Added focused regression coverage for the PR body generator.
+
+### Step 45: Drive Dry Run And Plan Quality Gate
+
+Added safer preflight behavior before launching agents:
+
+- `drive --dry-run` now previews spec/program orchestration without syncing Notion or starting workers.
+- Dry-run output includes autopilot, permission profile, concurrency, max tasks, max iterations, QA settings, feedback checks, and selected/deferred swarm tasks.
+- Added a plan-quality validator for missing project paths, missing tasks, unknown dependencies, missing acceptance criteria, missing test plans, missing expected-file hints, and weak verifier tasks.
+- Normal `drive` blocks hard plan errors before workers start; `--strict-plan` treats warnings as blockers too.
+- Smart parallel mode now prints selected and deferred task reasons.
+- Named `parallelGroup` values are now planner hints, while `parallelGroup: "serial"` remains a hard serialization signal. Independent tasks with different groups can run together when their expected files do not overlap.
