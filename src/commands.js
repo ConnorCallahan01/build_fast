@@ -3407,9 +3407,11 @@ async function runBrowserInteraction(page, interaction) {
   try {
     for (const step of interaction.steps) {
       if (step.action === "fill") {
-        await page.locator(step.selector).fill(step.value, { timeout: step.timeout });
+        await fillBrowserControl(page, step);
+      } else if (step.action === "select" || step.action === "selectOption") {
+        await page.locator(step.selector).first().selectOption(step.value, { timeout: step.timeout });
       } else if (step.action === "click") {
-        await page.locator(step.selector).click({ timeout: step.timeout });
+        await page.locator(step.selector).first().click({ timeout: step.timeout });
       } else if (step.action === "expectText") {
         const count = await page.getByText(step.text || step.value, { exact: false }).count();
         if (!count) throw new Error(`missing text: ${step.text || step.value}`);
@@ -3424,6 +3426,16 @@ async function runBrowserInteraction(page, interaction) {
   } catch (error) {
     return { name: `interaction ${interaction.name}`, ok: false, detail: error.message || String(error) };
   }
+}
+
+async function fillBrowserControl(page, step) {
+  const locator = page.locator(step.selector).first();
+  const tagName = await locator.evaluate((element) => element.tagName.toLowerCase(), undefined, { timeout: step.timeout });
+  if (tagName === "select") {
+    await locator.selectOption(step.value, { timeout: step.timeout });
+    return;
+  }
+  await locator.fill(step.value, { timeout: step.timeout });
 }
 
 async function checkServedJavaScriptModule(modulePath, baseUrl, fetchImpl = fetch) {

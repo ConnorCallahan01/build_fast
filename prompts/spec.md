@@ -66,7 +66,8 @@ Planning rules:
 - Include feedback loops that prove done.
 - Use the detected project scripts and files instead of generic test instructions.
 - If the project has a browser demo or UI, include browserQa. Use empty startCommand when no browser QA applies.
-- For browser UI work, include rendered interaction steps when selectors are predictable. Supported actions are fill, click, expectText, and expectSelector.
+- For browser UI work, include rendered interaction steps when selectors are predictable. Supported actions are fill, selectOption, click, expectText, and expectSelector.
+- Use selectOption for <select> controls. Use specific selectors for repeated controls when possible; if a selector matches multiple elements, browser QA clicks the first match.
 - Include dependencies only when later tasks need earlier task output.
 - Include expectedFiles for each task so build_fast can avoid parallel workers editing the same files.
 - Use precise expectedFiles. Prefer exact files over broad directories such as src/ or demo/ when you can predict them.

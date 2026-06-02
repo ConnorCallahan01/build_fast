@@ -68,6 +68,7 @@ const profile = browserQaProfile({
         name: "create note",
         steps: [
           { action: "fill", selector: "#note-title", value: "Launch plan" },
+          { action: "selectOption", selector: "#note-theme", value: "teal" },
           { action: "click", selector: "button[type='submit']" },
           { action: "expectText", text: "Launch plan" }
         ]
@@ -84,6 +85,7 @@ assert.deepEqual(profile.interactions[0], {
   name: "create note",
   steps: [
     { action: "fill", selector: "#note-title", value: "Launch plan", text: "", timeout: 2000 },
+    { action: "selectOption", selector: "#note-theme", value: "teal", text: "", timeout: 2000 },
     { action: "click", selector: "button[type='submit']", value: "", text: "", timeout: 2000 },
     { action: "expectText", selector: "", value: "", text: "Launch plan", timeout: 2000 }
   ]
