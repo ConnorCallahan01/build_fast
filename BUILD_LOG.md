@@ -725,6 +725,6 @@ Follow-up fix:
 
 Improved project initialization hygiene:
 
-- `init` now ensures `.build_fast/` is ignored whenever it detects or creates a git repository.
+- `init` now ensures `.build_fast/` and `node_modules/` are ignored whenever it detects or creates a git repository.
 - The helper appends the ignore rule only when missing and preserves existing `.gitignore` content.
-- Added regression coverage for creating `.gitignore` and avoiding duplicate `.build_fast/` rules.
+- Added regression coverage for creating `.gitignore` and avoiding duplicate `.build_fast/` / `node_modules/` rules.

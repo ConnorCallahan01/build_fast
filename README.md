@@ -74,7 +74,7 @@ build_fast init --ntn "https://www.notion.so/your-page-id" --install-qa
 
 This starts an interactive setup flow with arrow-key choices, saves project defaults in `.build_fast/config.json`, checks Notion/Git/Claude Code, and optionally installs Playwright browser QA dependencies.
 If the Notion parent page is blank, `init` creates the required build_fast data sources automatically.
-If the current folder is not a git repo, interactive init offers to run `git init`; non-interactive setup can pass `--init-git`. Init also ensures `.build_fast/` is listed in `.gitignore`.
+If the current folder is not a git repo, interactive init offers to run `git init`; non-interactive setup can pass `--init-git`. Init also ensures `.build_fast/` and `node_modules/` are listed in `.gitignore`.
 The banner animation only runs in a real TTY and can be disabled with `BUILD_FAST_ANIMATION=0`.
 
 Create a plan:

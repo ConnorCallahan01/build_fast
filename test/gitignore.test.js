@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ensureBuildFastGitignore } from "../src/commands.js";
+import { ensureInitGitignore } from "../src/commands.js";
 
 const originalLog = console.log;
 console.log = () => {};
@@ -11,13 +11,13 @@ const first = await mkdtemp(path.join(tmpdir(), "build-fast-gitignore-"));
 const second = await mkdtemp(path.join(tmpdir(), "build-fast-gitignore-"));
 
 try {
-  await ensureBuildFastGitignore(first);
-  await ensureBuildFastGitignore(first);
+  await ensureInitGitignore(first);
+  await ensureInitGitignore(first);
   const created = await readFile(path.join(first, ".gitignore"), "utf8");
-  assert.equal(created, ".build_fast/\n");
+  assert.equal(created, ".build_fast/\nnode_modules/\n");
 
   await writeFile(path.join(second, ".gitignore"), "node_modules\n/.build_fast/\n");
-  await ensureBuildFastGitignore(second);
+  await ensureInitGitignore(second);
   const existing = await readFile(path.join(second, ".gitignore"), "utf8");
   assert.equal(existing, "node_modules\n/.build_fast/\n");
 } finally {

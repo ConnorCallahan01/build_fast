@@ -231,7 +231,7 @@ async function initGitCheck(project, options = {}) {
   try {
     const root = await resolveGitRoot(project);
     term.success("git repo", root);
-    await ensureBuildFastGitignore(root);
+    await ensureInitGitignore(root);
     const remote = await gitRemoteUrl(root);
     if (remote) term.success("git remote", remote);
     else term.warn("git remote", "no origin remote configured");
@@ -255,13 +255,13 @@ async function initGitCheck(project, options = {}) {
   await execFileAsync("git", ["-C", project, "init"], { timeout: 10000 });
   const root = await resolveGitRoot(project);
   term.success("git repo", root);
-  await ensureBuildFastGitignore(root);
+  await ensureInitGitignore(root);
   const remote = await gitRemoteUrl(root);
   if (remote) term.success("git remote", remote);
   else term.warn("git remote", "no origin remote configured");
 }
 
-export async function ensureBuildFastGitignore(gitRoot) {
+export async function ensureInitGitignore(gitRoot) {
   const filePath = path.join(gitRoot, ".gitignore");
   let content = "";
   try {
@@ -269,18 +269,23 @@ export async function ensureBuildFastGitignore(gitRoot) {
   } catch {
     content = "";
   }
-  const hasRule = content.split(/\r?\n/).some((line) => {
-    const normalized = line.trim();
-    return normalized === ".build_fast" || normalized === ".build_fast/" || normalized === "/.build_fast" || normalized === "/.build_fast/";
-  });
-  if (hasRule) {
-    term.success("gitignore", ".build_fast/ already ignored");
+  const missing = [
+    { rule: ".build_fast/", matches: [".build_fast", ".build_fast/", "/.build_fast", "/.build_fast/"] },
+    { rule: "node_modules/", matches: ["node_modules", "node_modules/", "/node_modules", "/node_modules/"] }
+  ].filter(({ matches }) => !hasGitignoreRule(content, matches));
+
+  if (!missing.length) {
+    term.success("gitignore", ".build_fast/ and node_modules/ already ignored");
     return;
   }
 
   const prefix = content && !content.endsWith("\n") ? "\n" : "";
-  await appendFile(filePath, `${prefix}.build_fast/\n`);
-  term.success("gitignore", "added .build_fast/");
+  await appendFile(filePath, `${prefix}${missing.map((item) => item.rule).join("\n")}\n`);
+  term.success("gitignore", `added ${missing.map((item) => item.rule).join(", ")}`);
+}
+
+function hasGitignoreRule(content, matches) {
+  return content.split(/\r?\n/).some((line) => matches.includes(line.trim()));
 }
 
 function missingBuildFastSources(mapping) {
