@@ -233,7 +233,22 @@ Convert open bugs into pending Spec Tasks and sync them to Notion:
 node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
 ```
 
-The bug ledger is stored at `.build_fast/specs/<target>/bugs.json`. Browser QA failure artifacts are stored at `.build_fast/specs/<target>/qa-artifacts/` and are referenced in generated bug-task prompts. Today those bugs become normal Spec Tasks in Notion. A dedicated Notion Bugs database is planned.
+The bug ledger is stored at `.build_fast/specs/<target>/bugs.json`. Browser QA failure artifacts are stored at `.build_fast/specs/<target>/qa-artifacts/` and are referenced in generated bug-task prompts. Bugs can become normal Spec Tasks for repair work, and they also sync to a Notion `Bugs` data source when one is present.
+
+If the target Notion page has a `Bugs` data source, bug rows are also synced there. Required properties:
+
+| Property | Type |
+| --- | --- |
+| `Name` | Title |
+| `Status` | Status with `Not started`, `In progress`, `Done` |
+| `Source` | Select, commonly `browser_qa`, `feedback`, `manual` |
+| `Severity` | Select, commonly `P0`, `P1`, `P2`, `P3` |
+| `Spec` | Relation to the Specs data source |
+| `Task` | Relation to the Spec Tasks data source |
+| `Local ID` | Rich text for local bug id dedupe |
+| `Command` | Rich text |
+| `Artifact` | Rich text |
+| `Details` | Rich text |
 
 ## Workers
 

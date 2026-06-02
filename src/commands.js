@@ -2271,8 +2271,12 @@ function isUnsafeRelativePath(filePath) {
 
 async function syncToDataSources(config, notionUrl, spec) {
   if (!config.notionToken) return { ok: false, detail: "missing NOTION_API_TOKEN" };
-  const schema = await loadOrInspectSchema(config, notionUrl);
-  const mapping = resolveBuildFastDataSources(schema);
+  let schema = await loadOrInspectSchema(config, notionUrl);
+  let mapping = resolveBuildFastDataSources(schema);
+  if (!mapping.bugs) {
+    schema = await refreshInspectedSchema(config, notionUrl);
+    mapping = resolveBuildFastDataSources(schema);
+  }
   if (!mapping.specs || !mapping.specTasks) {
     return { ok: false, detail: "could not find required Specs and Spec Tasks data sources" };
   }
@@ -2300,6 +2304,10 @@ async function syncToDataSources(config, notionUrl, spec) {
     const existingTaskPage = await findExistingTaskPage(notion, mapping.specTasks.id, task, specPageId);
     const page = existingTaskPage || await notion.createDataSourcePage(mapping.specTasks.id, buildTaskProperties(task, mapping.specTasks, specPageId), markdownBlocks(formatTaskMarkdown(task)));
     nextSpec = attachNotionTaskPage(nextSpec, task.id, page);
+  }
+
+  if (mapping.bugs) {
+    await syncBugsToDataSource(config, notionUrl, notion, mapping.bugs, nextSpec, specPageId);
   }
 
   return { ok: true, spec: nextSpec };
@@ -2340,13 +2348,19 @@ async function loadOrInspectSchema(config, notionUrl) {
   const inspectPath = path.join(process.cwd(), ".build_fast", "notion-inspect", `${pageId}.json`);
   const existing = await readJson(inspectPath, undefined);
   if (existing?.databases?.length) return existing;
+  return refreshInspectedSchema(config, notionUrl);
+}
+
+async function refreshInspectedSchema(config, notionUrl) {
+  const pageId = parseNotionId(notionUrl);
+  const inspectPath = path.join(process.cwd(), ".build_fast", "notion-inspect", `${pageId}.json`);
   const inspected = await inspectNotionPage(config, notionUrl);
   if (!inspected.ok) throw new Error(inspected.detail);
   await writeJson(inspectPath, inspected);
   return inspected;
 }
 
-function resolveBuildFastDataSources(schema) {
+export function resolveBuildFastDataSources(schema) {
   const sources = [];
   for (const database of schema.databases || []) {
     for (const source of database.dataSources || []) {
@@ -2355,7 +2369,8 @@ function resolveBuildFastDataSources(schema) {
   }
   return {
     specs: sources.find((source) => source.title === "Specs" && hasProperties(source, ["Name", "Status", "Project"])),
-    specTasks: sources.find((source) => source.title === "Spec Tasks" && hasProperties(source, ["Name", "Status", "Spec", "Branch"]))
+    specTasks: sources.find((source) => source.title === "Spec Tasks" && hasProperties(source, ["Name", "Status", "Spec", "Branch"])),
+    bugs: sources.find((source) => source.title === "Bugs" && hasProperties(source, ["Name", "Status", "Source", "Local ID"]))
   };
 }
 
@@ -2384,6 +2399,70 @@ function buildTaskProperties(task, dataSource, specPageId) {
   }, dataSource.properties);
 }
 
+async function syncBugsToDataSource(config, notionUrl, notion, bugsDataSource, spec, specPageId) {
+  const bugs = await readBugs(config, notionUrl);
+  if (!bugs.length) return;
+
+  let changed = false;
+  const nextBugs = [];
+  for (const bug of bugs) {
+    const bugPageId = bug.notion?.bugPageId || (await findExistingBugPage(notion, bugsDataSource.id, bug))?.id;
+    const page = bugPageId
+      ? await notion.updatePage(bugPageId, buildBugProperties(bug, bugsDataSource, spec, specPageId))
+      : await notion.createDataSourcePage(bugsDataSource.id, buildBugProperties(bug, bugsDataSource, spec, specPageId), markdownBlocks(formatBugMarkdown(bug)));
+    const nextBug = {
+      ...bug,
+      notion: {
+        ...(bug.notion || {}),
+        bugPageId: page.id,
+        bugPageUrl: page.url
+      },
+      updatedAt: bug.updatedAt || nowIso()
+    };
+    changed = changed || nextBug.notion.bugPageId !== bug.notion?.bugPageId || nextBug.notion.bugPageUrl !== bug.notion?.bugPageUrl;
+    nextBugs.push(nextBug);
+  }
+
+  if (changed) await saveBugs(config, notionUrl, nextBugs);
+}
+
+async function findExistingBugPage(notion, dataSourceId, bug) {
+  const response = await notion.queryDataSource(dataSourceId, {
+    page_size: 10,
+    filter: {
+      property: "Local ID",
+      rich_text: { equals: bug.id }
+    }
+  });
+  return response.results?.[0];
+}
+
+export function buildBugProperties(bug, dataSource, spec, specPageId) {
+  const task = (spec.tasks || []).find((candidate) => candidate.id === bug.taskId);
+  return cleanProperties({
+    Name: notionTitle(bug.title || bug.id),
+    Status: notionStatus(bugStatusName(bug, task)),
+    Source: notionSelect(bug.source || "manual"),
+    Severity: notionSelect(bug.severity || "P2"),
+    Spec: notionRelation(bug.specId === spec.id ? [specPageId] : []),
+    Task: notionRelation(task?.notion?.taskPageId ? [task.notion.taskPageId] : []),
+    "Local ID": notionRichText(bug.id),
+    Command: notionRichText(bug.command || ""),
+    Artifact: notionRichText(bug.artifactPath || ""),
+    Details: notionRichText(bug.details || "")
+  }, dataSource.properties);
+}
+
+function bugStatusName(bug, task) {
+  if (task?.status === "completed" || ["done", "resolved", "closed"].includes(bug.status)) return "Done";
+  if (task?.status === "in_progress" || bug.status === "in_progress") return "In progress";
+  return "Not started";
+}
+
+function notionSelect(name) {
+  return { select: { name } };
+}
+
 function cleanProperties(properties, schema = {}) {
   return Object.fromEntries(
     Object.entries(properties).filter(([name, value]) => {
@@ -2405,6 +2484,20 @@ function formatTaskMarkdown(task) {
     (task.acceptanceCriteria || []).map((item) => `- ${item}`).join("\n") || "- Not specified.",
     "## Test Plan",
     (task.testPlan || []).map((item) => `- ${item}`).join("\n") || "- Not specified."
+  ].join("\n\n");
+}
+
+function formatBugMarkdown(bug) {
+  return [
+    `# ${bug.id}: ${bug.title}`,
+    "## Source",
+    bug.source || "unknown",
+    "## Details",
+    bug.details || "No details recorded.",
+    "## Command",
+    bug.command || "No command recorded.",
+    "## Artifact",
+    bug.artifactPath || "No artifact recorded."
   ].join("\n\n");
 }
 
@@ -2709,6 +2802,7 @@ async function qa(flags) {
   if (failed.length) {
     const artifactPath = await writeBrowserQaArtifact(config, notionUrl, result, failed);
     await logBrowserQaBugs(config, notionUrl, target, failed, artifactPath);
+    await syncBugsOnly(config, notionUrl, target);
     if (flags["create-task"] || flags["create-tasks"]) {
       const updated = await addOpenBugTasks(config, notionUrl, target);
       if (updated) {
@@ -2837,6 +2931,23 @@ async function logBrowserQaBugs(config, notionUrl, target, failed, artifactPath 
       specId: target.id,
       status: "open"
     });
+  }
+}
+
+async function syncBugsOnly(config, notionUrl, target) {
+  if (!config.notionToken) return;
+  try {
+    let schema = await loadOrInspectSchema(config, notionUrl);
+    let mapping = resolveBuildFastDataSources(schema);
+    if (!mapping.bugs) {
+      schema = await refreshInspectedSchema(config, notionUrl);
+      mapping = resolveBuildFastDataSources(schema);
+    }
+    if (!mapping.bugs) return;
+    const notion = new NotionClient({ token: config.notionToken, version: config.notionVersion });
+    await syncBugsToDataSource(config, notionUrl, notion, mapping.bugs, target, target.notion?.specPageId);
+  } catch (error) {
+    console.warn(`WARN Notion bug sync skipped: ${error.message}`);
   }
 }
 
@@ -3202,7 +3313,8 @@ async function bugs(flags) {
   }
   for (const bug of items) {
     const task = bug.taskId ? ` task=${bug.taskId}` : "";
-    console.log(`${bug.status || "open"} ${bug.id} [${bug.source}] ${bug.title}${task}`);
+    const notion = bug.notion?.bugPageUrl ? ` notion=${bug.notion.bugPageUrl}` : "";
+    console.log(`${bug.status || "open"} ${bug.id} [${bug.source}] ${bug.title}${task}${notion}`);
     if (bug.details) console.log(`  ${bug.details}`);
   }
 }

@@ -127,6 +127,8 @@ If QA fails, `build_fast` writes bugs to the local ledger for that Notion target
 node bin/build_fast.js bugs --ntn "$NTN"
 ```
 
+When the Notion page has a `Bugs` data source, `sync`, `qa`, and `drive --qa` upsert local bug ledger entries into Notion. The expected Bugs properties are `Name`, `Status`, `Source`, `Severity`, `Spec`, `Task`, `Local ID`, `Command`, `Artifact`, and `Details`.
+
 Convert open bugs into normal pending Spec Tasks, sync them to Notion, then drive fresh workers to fix them:
 
 ```bash
@@ -267,7 +269,7 @@ node bin/build_fast.js drive --ntn local-smoke --from-goal --no-agent
 
 - Claude Code is the only worker adapter.
 - Notion mapping expects the current `Specs` and `Spec Tasks` data-source shape.
-- Logged bugs are stored locally and converted into Notion Spec Tasks; a dedicated Notion Bugs database is planned.
+- Logged bugs are stored locally and can sync into a Notion `Bugs` data source when present.
 - Merge/PR automation is currently a `ship` preview/apply handoff rather than a full release manager.
 - Review support is still basic.
 - TypeScript/package distribution is deferred.

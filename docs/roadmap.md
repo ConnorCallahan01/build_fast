@@ -26,6 +26,7 @@
 - Improve feedback-loop command validation.
 - Make failed feedback checks easier to inspect and rerun. MVP repair-task loop added.
 - Log feedback and QA bugs into a ledger and convert them into final-pass fix tasks. MVP added.
+- Sync bug ledger entries into a Notion `Bugs` data source when present. MVP added.
 - Run final-pass bug workers automatically at the end of `drive`. MVP added for browser QA in `junior_mode`/`boss_mode`.
 - Add clearer recovery commands after partial drive runs.
 - Add a `--dry-run` preview for drive orchestration.

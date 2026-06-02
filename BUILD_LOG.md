@@ -588,3 +588,13 @@ Added `qa-setup` for rendered browser QA prerequisites:
 - `qa-setup --ntn <page>` resolves the active spec/program project from the Notion target.
 - `qa-setup --install` installs the Playwright package and Chromium browser files using the detected package manager.
 - Package manager detection supports npm, pnpm, yarn, and bun lockfiles, with `--package-manager` available as an override.
+
+### Step 42: Notion Bugs Data Source Sync
+
+Added Notion-side bug tracking:
+
+- Created a `Bugs` database on the live test Notion page with `Name`, `Status`, `Source`, `Severity`, `Spec`, `Task`, `Local ID`, `Command`, `Artifact`, `Details`, and `Created`.
+- `sync` now detects an optional `Bugs` data source and upserts local bug ledger entries by `Local ID`.
+- Bug rows relate back to the matching Spec page and repair Task page when those Notion page ids are known.
+- `qa --type browser` now syncs bug rows even when `--create-task` is not used.
+- `bugs --ntn` prints the synced Notion bug URL when available.
