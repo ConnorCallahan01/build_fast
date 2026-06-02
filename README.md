@@ -48,39 +48,30 @@ export NOTION_API_TOKEN=secret_...
 
 ## Quick Start
 
-Set your Notion page URL:
+Initialize the current project:
 
 ```bash
-NTN="https://www.notion.so/your-page-id"
+node bin/build_fast.js init --ntn "https://www.notion.so/your-page-id" --install-qa
 ```
 
-Create an interactive goal contract:
+This saves project defaults in `.build_fast/config.json`, checks Notion/Git/Claude Code, and optionally installs Playwright browser QA dependencies.
+
+Create a plan:
 
 ```bash
-node bin/build_fast.js goal \
-  --goal "Add a small CLI demo mode that prints a sample workflow" \
-  --type feature \
-  --project /path/to/your/project \
-  --ntn "$NTN"
+node bin/build_fast.js plan
 ```
 
-Run the full agent loop from that approved goal:
+Run the full agent loop:
 
 ```bash
-node bin/build_fast.js drive \
-  --ntn "$NTN" \
-  --from-goal \
-  --autopilot junior_mode \
-  --permission-profile managed \
-  --parallel smart \
-  --concurrency 2 \
-  --max-tasks 2
+node bin/build_fast.js go
 ```
 
 Check state:
 
 ```bash
-node bin/build_fast.js status --ntn "$NTN"
+node bin/build_fast.js status
 ```
 
 Clean worktrees after a successful run:
@@ -93,6 +84,7 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 
 | Command | Purpose |
 | --- | --- |
+| `init` | Configure the current project, Notion target, worker harness, defaults, and QA setup |
 | `doctor` | Verify local tools, config, Notion token, and target page access |
 | `inspect` | Print Notion child databases/data sources and properties |
 | `goal` | Create an interactive, editable goal contract |
@@ -100,6 +92,7 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 | `plan` | Generate a repo-aware spec and task plan |
 | `sync` | Push local spec/task state to Notion |
 | `drive` | Run planning, sync, swarm, collect, checks, and final sync |
+| `go` | Run `drive` with defaults saved by `init` |
 | `swarm` | Run dependency-ready tasks in isolated worktrees, optionally with smart parallel grouping |
 | `collect` | Inspect or apply completed task output |
 | `status` | Show spec, task, feedback, worker, and collect state |

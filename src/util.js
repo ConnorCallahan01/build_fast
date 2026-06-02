@@ -117,15 +117,17 @@ export function printHelp() {
 
 Commands:
   doctor
+  init   [--ntn <notion-url>] [--project <dir>] [--worker claude] [--install-qa] [--yes]
   goal   --goal "..." --ntn <notion-url> --project <dir> --type <type> [--yes|--interactive]
   program --goal "..." --ntn <notion-url> --project <dir> [--drive]
-  plan   --goal "..." --ntn <notion-url> --project <dir> --type <type>
+  plan   [--goal "..."] [--ntn <notion-url>] [--project <dir>] [--type <type>]
          [--no-agent for deterministic local planning]
          Types: feature, bug, chore (single spec)
                 project, refactor, init, overhaul (multi-spec program)
   tasks  --ntn <notion-url> [regenerates from an existing local spec]
   start  --goal "..." --ntn <notion-url> --project <dir> --type <type> --autopilot junior_mode
   drive  --ntn <notion-url> [--goal "..." | --from-goal] [--project <dir>] [--type <type>] [--parallel smart] [--dry-run] [--qa browser] [--max-qa-repairs 1]
+  go     [uses defaults saved by init; equivalent to drive with smart parallel/browser QA defaults]
   run    --ntn <notion-url> [--autopilot intern_mode|junior_mode|boss_mode]
   swarm  --ntn <notion-url> [--concurrency 2] [--max-tasks 2] [--parallel smart]
   status --ntn <notion-url> [--spec spec-001]

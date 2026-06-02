@@ -4,7 +4,14 @@ import { ensureDir, readJson, writeJson } from "./util.js";
 const DEFAULT_CONFIG = {
   defaultAgent: "claude",
   defaultAutopilot: "junior_mode",
-  permissionProfile: "inherit",
+  permissionProfile: "managed",
+  defaultParallel: "smart",
+  defaultQa: "browser",
+  defaultConcurrency: 4,
+  defaultMaxTasks: 5,
+  defaultMaxQaRepairs: 1,
+  defaultProject: ".",
+  defaultNotion: "",
   notionVersion: "2026-03-11",
   ledgerDir: ".build_fast",
   claude: {
@@ -55,5 +62,22 @@ export async function ensureConfig(cwd = process.cwd()) {
   if (!existing) {
     await writeJson(configPath, DEFAULT_CONFIG);
   }
+  return loadConfig(cwd);
+}
+
+export async function saveConfigPatch(patch, cwd = process.cwd()) {
+  const configDir = path.join(cwd, ".build_fast");
+  const configPath = path.join(configDir, "config.json");
+  await ensureDir(configDir);
+  const existing = await readJson(configPath, {});
+  const next = {
+    ...existing,
+    ...patch,
+    claude: {
+      ...(existing.claude || {}),
+      ...(patch.claude || {})
+    }
+  };
+  await writeJson(configPath, next);
   return loadConfig(cwd);
 }

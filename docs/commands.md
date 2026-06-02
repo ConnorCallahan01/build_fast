@@ -9,10 +9,13 @@ node bin/build_fast.js <command>
 ## Common Commands
 
 ```bash
+node bin/build_fast.js init --ntn "$NTN" --install-qa
 node bin/build_fast.js doctor --ntn "$NTN"
 node bin/build_fast.js inspect --ntn "$NTN"
-node bin/build_fast.js status --ntn "$NTN"
+node bin/build_fast.js status
 ```
+
+`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, smart parallel settings, and browser QA. The interactive wizard lets you choose Claude Code, Codex, or OpenCode as the desired harness; the current MVP saves/runs Claude Code only.
 
 ## Goal And Planning
 
@@ -31,6 +34,8 @@ node bin/build_fast.js plan \
   --project /path/to/your/project \
   --type feature
 ```
+
+After `init`, you can also run `plan` with no flags and answer the prompts.
 
 Useful flags:
 
@@ -65,6 +70,14 @@ node bin/build_fast.js program \
 ```
 
 ## Full Loop
+
+After `init`, use the friendly defaulted command:
+
+```bash
+node bin/build_fast.js go
+```
+
+`go` runs `drive` using saved defaults.
 
 ```bash
 node bin/build_fast.js drive \

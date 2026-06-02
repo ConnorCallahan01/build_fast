@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, ensureConfig } from "./config.js";
+import { loadConfig, ensureConfig, saveConfigPatch } from "./config.js";
 import { runClaude } from "./claude.js";
 import { makeSpec, loadSpec, saveSpec, specDir, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage, isMultiSpecType, makeProgram, loadProgram, saveProgram, readyProgramSpecs, programToStandaloneSpec, updateProgramSpec } from "./ledger.js";
 import { checkNotionPage, inspectNotionPage, markdownBlocks, NotionClient, parseNotionId, pageTitle, notionRelation, notionRichText, notionStatus, notionTitle, notionUrl } from "./notion.js";
@@ -18,6 +18,8 @@ const execFileAsync = promisify(execFile);
 
 export async function dispatch(command, flags) {
   switch (command) {
+    case "init":
+      return init(flags);
     case "doctor":
       return doctor(flags);
     case "goal":
@@ -34,7 +36,7 @@ export async function dispatch(command, flags) {
       return drive(flags);
     case "run":
     case "go":
-      return run(flags);
+      return command === "go" ? go(flags) : run(flags);
     case "swarm":
       return swarm(flags);
     case "status":
@@ -95,6 +97,156 @@ async function commandCheck(name, args) {
   } catch (error) {
     return { name, ok: false, detail: error.message };
   }
+}
+
+async function init(flags = {}) {
+  const existing = await ensureConfig();
+  const yes = flags.yes === true || flags.yes === "true";
+  const interactive = process.stdin.isTTY && !yes;
+  const project = normalizeProject(optionalString(flags, "project", existing.defaultProject && existing.defaultProject !== "." ? existing.defaultProject : process.cwd()));
+  let notion = optionalString(flags, "ntn", existing.defaultNotion || "");
+  let worker = optionalString(flags, "worker", existing.defaultAgent || "claude");
+  let autopilot = optionalString(flags, "autopilot", existing.defaultAutopilot || "junior_mode");
+  let permissionProfile = optionalString(flags, "permission-profile", existing.permissionProfile || "managed");
+  let concurrency = Number(optionalString(flags, "concurrency", String(existing.defaultConcurrency || 4)));
+  let maxTasks = Number(optionalString(flags, "max-tasks", String(existing.defaultMaxTasks || concurrency || 5)));
+  let qa = optionalString(flags, "qa", existing.defaultQa || "browser");
+  let installQa = flags["install-qa"] === true || flags["install-qa"] === "true";
+
+  let rl;
+  try {
+    if (interactive) {
+      rl = createInterface({ input: process.stdin, output: process.stdout });
+      term.heading("build_fast init", path.basename(project));
+      notion = await askDefault(rl, "Notion parent page URL", notion);
+      worker = await askChoice(rl, "Coding harness", worker, ["claude", "codex", "opencode"]);
+      if (worker !== "claude") {
+        term.warn("Unsupported harness", `${worker} is saved for future use, but this MVP runs Claude Code only`);
+        worker = "claude";
+      }
+      autopilot = await askChoice(rl, "Autopilot", autopilot, ["junior_mode", "intern_mode", "boss_mode"]);
+      permissionProfile = await askChoice(rl, "Permission profile", permissionProfile, ["managed", "inherit"]);
+      concurrency = Number(await askDefault(rl, "Worker concurrency", String(concurrency || 4)));
+      maxTasks = Number(await askDefault(rl, "Max tasks per swarm", String(maxTasks || concurrency || 5)));
+      qa = await askChoice(rl, "Final QA mode", qa || "browser", ["browser", "none"]);
+      installQa = await askYesNo(rl, "Install/check Playwright browser QA dependencies now?", installQa);
+    }
+  } finally {
+    rl?.close();
+  }
+
+  if (worker !== "claude") throw new Error(`Unsupported worker adapter: ${worker}. Current MVP supports Claude Code only.`);
+  const patch = {
+    defaultAgent: worker,
+    defaultAutopilot: autopilot,
+    permissionProfile,
+    defaultParallel: "smart",
+    defaultQa: qa === "none" ? "" : qa,
+    defaultConcurrency: Math.max(1, concurrency || 4),
+    defaultMaxTasks: Math.max(1, maxTasks || concurrency || 5),
+    defaultMaxQaRepairs: Number(optionalString(flags, "max-qa-repairs", String(existing.defaultMaxQaRepairs ?? 1))),
+    defaultProject: project,
+    defaultNotion: notion
+  };
+  const config = await saveConfigPatch(patch);
+
+  term.heading("Setup checks");
+  const checks = [
+    await commandCheck("node", ["--version"]),
+    await commandCheck("git", ["--version"]),
+    await commandCheck(config.claude.command || "claude", ["--version"])
+  ];
+  for (const check of checks) term.check(check.ok, check.name, check.detail);
+  term.check(Boolean(config.notionToken), "notion token", config.notionToken ? "configured" : "missing NOTION_API_TOKEN");
+
+  if (notion) {
+    const page = await checkNotionPage(config, notion);
+    term.check(page.ok, "notion page", `${page.pageId || "unparsed"} ${page.detail}`);
+    if (page.ok) {
+      term.step("Inspecting Notion workspace schema");
+      try {
+        const inspected = await inspectNotionPage(config, notion);
+        const databases = inspected.databases?.length || 0;
+        const bugs = findDataSourceByTitle(inspected, "Bugs") ? "Bugs data source found" : "Bugs data source not found";
+        term.info("Notion databases", `${databases} child database${databases === 1 ? "" : "s"}; ${bugs}`);
+      } catch (error) {
+        term.warn("Notion inspect skipped", error.message);
+      }
+    }
+  } else {
+    term.warn("notion page", "not configured; pass --ntn later or rerun init");
+  }
+
+  await initGitCheck(project);
+  if (installQa && patch.defaultQa === "browser") {
+    await qaSetup({ project, install: true });
+  } else if (patch.defaultQa === "browser") {
+    term.info("Browser QA", "run `node bin/build_fast.js qa-setup --install` to install Playwright");
+  }
+
+  term.success("Saved config", ".build_fast/config.json");
+  console.log("Next:");
+  console.log("  node bin/build_fast.js plan");
+  console.log("  node bin/build_fast.js go");
+}
+
+async function initGitCheck(project) {
+  try {
+    const root = await resolveGitRoot(project);
+    term.success("git repo", root);
+    const remote = await gitRemoteUrl(root);
+    if (remote) term.success("git remote", remote);
+    else term.warn("git remote", "no origin remote configured");
+  } catch (error) {
+    term.warn("git repo", `${error.message}; initialize git before shipping PRs`);
+  }
+}
+
+function findDataSourceByTitle(inspected, title) {
+  const wanted = String(title || "").toLowerCase();
+  for (const database of inspected?.databases || []) {
+    for (const source of database.dataSources || []) {
+      if (String(source.title || "").toLowerCase() === wanted) return source;
+    }
+  }
+  return null;
+}
+
+async function askDefault(rl, label, fallback = "") {
+  const suffix = fallback ? ` [${fallback}]` : "";
+  const value = (await rl.question(`${label}${suffix}: `)).trim();
+  return value || fallback;
+}
+
+async function askChoice(rl, label, fallback, choices) {
+  const normalized = choices.join("/");
+  while (true) {
+    const value = (await askDefault(rl, `${label} (${normalized})`, fallback)).trim();
+    if (choices.includes(value)) return value;
+    console.log(`Choose one of: ${normalized}`);
+  }
+}
+
+async function askYesNo(rl, label, fallback = false) {
+  const value = (await askDefault(rl, `${label} (y/n)`, fallback ? "y" : "n")).toLowerCase();
+  return value === "y" || value === "yes";
+}
+
+async function go(flags = {}) {
+  const config = await ensureConfig();
+  const notionUrl = optionalString(flags, "ntn", config.defaultNotion || "");
+  if (!notionUrl) throw new Error("No default Notion page configured. Run `build_fast init --ntn <page>` or pass --ntn.");
+  return drive({
+    ...flags,
+    ntn: notionUrl,
+    autopilot: optionalString(flags, "autopilot", config.defaultAutopilot || "junior_mode"),
+    "permission-profile": optionalString(flags, "permission-profile", config.permissionProfile || "managed"),
+    parallel: optionalString(flags, "parallel", config.defaultParallel || "smart"),
+    concurrency: optionalString(flags, "concurrency", String(config.defaultConcurrency || 4)),
+    "max-tasks": optionalString(flags, "max-tasks", String(config.defaultMaxTasks || config.defaultConcurrency || 5)),
+    qa: optionalString(flags, "qa", config.defaultQa || ""),
+    "max-qa-repairs": optionalString(flags, "max-qa-repairs", String(config.defaultMaxQaRepairs ?? 1))
+  });
 }
 
 async function goal(flags) {
@@ -358,14 +510,26 @@ async function loadGoalContract(config, notionUrl) {
 async function plan(flags) {
   const config = await ensureConfig();
   validateWorkerFlag(flags);
-  const notionUrl = requireFlag(flags, "ntn");
-  const type = optionalString(flags, "type", "feature");
-  const project = normalizeProject(optionalString(flags, "project", process.cwd()));
+  const notionUrl = optionalString(flags, "ntn", config.defaultNotion || "");
+  if (!notionUrl) throw new Error("Missing required flag: --ntn. Run `build_fast init --ntn <page>` to save a default.");
+  let type = optionalString(flags, "type", "feature");
+  const project = normalizeProject(optionalString(flags, "project", config.defaultProject || process.cwd()));
 
   if (isMultiSpecType(type)) return planProgram({ config, notionUrl, type, project, flags });
 
   const existing = await loadSpec(config, notionUrl);
-  const goal = optionalString(flags, "goal", existing?.goal);
+  let goal = optionalString(flags, "goal", existing?.goal);
+  if (!goal && process.stdin.isTTY && !(flags.yes === true || flags.yes === "true")) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      term.heading("build_fast plan", path.basename(project));
+      goal = await askDefault(rl, "What do you want to build?", "");
+      type = await askChoice(rl, "Work type", type, ["feature", "bug", "chore", "refactor", "project", "init", "overhaul"]);
+    } finally {
+      rl.close();
+    }
+    if (isMultiSpecType(type)) return planProgram({ config, notionUrl, type, project, flags: { ...flags, goal } });
+  }
   if (!goal) throw new Error("Missing required flag: --goal");
   if (existing && flags.skipIfExists) {
     console.log(`Existing plan found: ${existing.title}`);
@@ -407,7 +571,16 @@ async function plan(flags) {
 
 async function planProgram({ config, notionUrl, type, project, flags }) {
   const existing = await loadProgram(config, notionUrl);
-  const goal = optionalString(flags, "goal", existing?.goal);
+  let goal = optionalString(flags, "goal", existing?.goal);
+  if (!goal && process.stdin.isTTY && !(flags.yes === true || flags.yes === "true")) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      term.heading("build_fast program", path.basename(project));
+      goal = await askDefault(rl, "What larger goal should be planned?", "");
+    } finally {
+      rl.close();
+    }
+  }
   if (!goal) throw new Error("Missing required flag: --goal");
 
   const repoContext = await scanRepo(project);
@@ -554,15 +727,16 @@ async function run(flags) {
 
 async function drive(flags) {
   validateWorkerFlag(flags);
-  const notionUrl = requireFlag(flags, "ntn");
-  const autopilot = optionalString(flags, "autopilot", "junior_mode");
-  const permissionProfile = optionalString(flags, "permission-profile", "managed");
-  const concurrency = optionalString(flags, "concurrency", "2");
-  const maxTasks = optionalString(flags, "max-tasks", concurrency);
-  const parallel = optionalString(flags, "parallel", "default");
+  let config = await ensureConfig();
+  const notionUrl = optionalString(flags, "ntn", config.defaultNotion || "");
+  if (!notionUrl) throw new Error("Missing required flag: --ntn. Run `build_fast init --ntn <page>` to save a default.");
+  const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot || "junior_mode");
+  const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "managed");
+  const concurrency = optionalString(flags, "concurrency", String(config.defaultConcurrency || 2));
+  const maxTasks = optionalString(flags, "max-tasks", String(config.defaultMaxTasks || concurrency));
+  const parallel = optionalString(flags, "parallel", config.defaultParallel || "default");
   const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
 
-  let config = await ensureConfig();
   const goalContract = flags["from-goal"] ? await loadGoalContract(config, notionUrl) : undefined;
   if (flags["from-goal"] && !goalContract) throw new Error("No saved goal contract found. Run `build_fast goal --goal ... --ntn ... --project ...` first.");
 
@@ -1847,7 +2021,8 @@ function taskPatchFromResult(result) {
 
 async function status(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = optionalString(flags, "ntn", config.defaultNotion || "");
+  if (!notionUrl) throw new Error("Missing required flag: --ntn. Run `build_fast init --ntn <page>` to save a default.");
   const workers = await readActiveWorkers(config);
 
   const program = await loadProgram(config, notionUrl);

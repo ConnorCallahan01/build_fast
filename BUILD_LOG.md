@@ -652,3 +652,15 @@ Improved terminal transparency for long autonomous runs:
 - Smart-parallel selection now prints selected/deferred tasks in a more scannable format.
 - Swarm task summaries are wrapped over multiple lines instead of one long paragraph.
 - Added terminal formatting regression coverage.
+
+### Step 48: Interactive Init And Go Defaults
+
+Started the transition from power-user commands to a true CLI workflow:
+
+- Added `init` to save project defaults for Notion page, project path, harness, autopilot, permission profile, smart parallel settings, browser QA, concurrency, and max tasks.
+- `init` can run interactively or with `--yes`; the harness chooser shows Claude/Codex/OpenCode while the MVP enforces Claude Code.
+- `init --install-qa` can run the existing Playwright QA setup flow.
+- Added `go` as a friendly defaulted wrapper around `drive`, using the saved config values.
+- `plan` can now use saved Notion/project defaults and prompt for a goal/type when run interactively without flags.
+- `status` can use the saved default Notion page.
+- Added smoke coverage for `init`, defaulted `plan`, and `go --dry-run`.
