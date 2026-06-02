@@ -260,6 +260,7 @@ The QA command starts the demo, waits for the page, fetches the HTML, and checks
 - expected form/list/search/tag anchors
 - a module script for the browser app
 - served core and app JavaScript modules
+- linked stylesheet/script assets resolved from the served page URL, with `200` responses and CSS/JavaScript MIME types
 
 If checks fail, bugs are logged locally:
 

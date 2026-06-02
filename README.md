@@ -139,6 +139,8 @@ For one-command QA-to-task creation:
 node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
 ```
 
+Browser QA fetches the served HTML, verifies expected UI anchors, resolves linked stylesheets/scripts the same way a browser does, and checks those assets return `200` with CSS/JavaScript MIME types. This catches broken paths like a page served at `/` linking to `./styles.css` when the stylesheet actually lives under `/demo/styles.css`.
+
 ## Smart Parallel Runs
 
 Use smart parallel mode when you want more agents running at once without blindly launching tasks that are likely to edit the same files:

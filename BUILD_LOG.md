@@ -522,3 +522,15 @@ Added a conservative smart parallel mode for faster worker runs without blindly 
 - Smart swarm prints the selected group and deferred tasks before workers start.
 - If completed smart-parallel outputs overlap during collect, `drive` creates a serial `parallel_integration` task with the overlapping files and dependency task IDs.
 - Added regression coverage for smart task selection and integration-task creation.
+
+### Step 36: Browser QA Served Asset Checks
+
+The Orbit Notes redesign initially looked unstyled in the browser even though the generated CSS existed. Root cause: the server served `demo/index.html` at `/`, so relative links like `./styles.css` resolved to `/styles.css` instead of `/demo/styles.css`.
+
+Added browser QA checks that:
+
+- parse stylesheet and script tags from the served HTML,
+- resolve URLs using browser-equivalent `new URL(asset, pageUrl)` behavior,
+- fetch each linked asset,
+- require `200` responses and CSS/JavaScript MIME types,
+- cover the broken relative-path case with a fake-fetch regression test.

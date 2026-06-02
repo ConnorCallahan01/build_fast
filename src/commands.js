@@ -2582,6 +2582,7 @@ async function runBrowserQa(projectDir, flags = {}) {
     checks.push({ name: "create note form", ok: hasAll(html, ["note-title", "note-body", "note-tags", "create-form"]), detail: "expected title/body/tags/create form anchors" });
     checks.push({ name: "search and tag UI", ok: hasAll(html, ["search-input", "tag-filter", "notes-list"]), detail: "expected search/tag/list anchors" });
     checks.push({ name: "module script", ok: hasModuleScript(html, "./app.js") || hasModuleScript(html, "/demo/app.js"), detail: "expected demo/app.js module script" });
+    checks.push(...await checkHtmlAssets(html, url));
 
     const moduleResponse = await fetch(new URL("/src/orbit-notes.js", url));
     checks.push({
@@ -2620,6 +2621,70 @@ function hasModuleScript(html, src) {
     const hasSrc = new RegExp(`\\bsrc=["']${src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(script);
     return hasType && hasSrc;
   });
+}
+
+export async function checkHtmlAssets(html, baseUrl, fetchImpl = fetch) {
+  const assets = htmlAssetReferences(html, baseUrl);
+  if (!assets.length) {
+    return [{ name: "linked assets", ok: false, detail: "no stylesheet or script assets found" }];
+  }
+  const checks = [];
+  for (const asset of assets) {
+    try {
+      const response = await fetchImpl(asset.url);
+      const contentType = response.headers?.get?.("content-type") || "";
+      checks.push({
+        name: `${asset.kind} asset ${asset.pathname}`,
+        ok: response.ok && assetContentTypeOk(asset.kind, contentType),
+        detail: `${response.status} ${contentType || "missing content-type"}`
+      });
+    } catch (error) {
+      checks.push({
+        name: `${asset.kind} asset ${asset.pathname}`,
+        ok: false,
+        detail: error.message || String(error)
+      });
+    }
+  }
+  return checks;
+}
+
+export function htmlAssetReferences(html, baseUrl) {
+  const assets = [];
+  for (const tag of html.match(/<link\b[^>]*>/gi) || []) {
+    const rel = tagAttribute(tag, "rel").toLowerCase();
+    const href = tagAttribute(tag, "href");
+    if (!href || !rel.split(/\s+/).includes("stylesheet")) continue;
+    assets.push(assetReference("stylesheet", href, baseUrl));
+  }
+  for (const tag of html.match(/<script\b[^>]*>/gi) || []) {
+    const src = tagAttribute(tag, "src");
+    if (!src) continue;
+    assets.push(assetReference("script", src, baseUrl));
+  }
+  return assets.filter(Boolean);
+}
+
+function assetReference(kind, rawUrl, baseUrl) {
+  try {
+    const url = new URL(rawUrl, baseUrl);
+    return { kind, url, pathname: url.pathname };
+  } catch {
+    return null;
+  }
+}
+
+function assetContentTypeOk(kind, contentType) {
+  const value = String(contentType || "").toLowerCase();
+  if (kind === "stylesheet") return value.includes("text/css");
+  if (kind === "script") return value.includes("javascript") || value.includes("ecmascript");
+  return false;
+}
+
+function tagAttribute(tag, name) {
+  const pattern = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i");
+  const match = tag.match(pattern);
+  return match?.[1] || match?.[2] || match?.[3] || "";
 }
 
 async function waitForHttp(url, timeoutMs) {

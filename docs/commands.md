@@ -164,7 +164,7 @@ Run browser QA against the active spec/program project:
 node bin/build_fast.js qa --ntn "$NTN" --type browser
 ```
 
-The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, and served JavaScript modules.
+The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types.
 
 Create bug-fix tasks immediately when QA fails:
 
