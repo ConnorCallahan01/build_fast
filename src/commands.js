@@ -298,17 +298,18 @@ export async function askLongText(rl, label, fallback = "") {
   }
 }
 
-async function askChoice(rl, label, fallback, choices) {
+export async function askChoice(rl, label, fallback, choices) {
   if (process.stdin.isTTY && process.stdout.isTTY) {
-    rl.pause();
+    rl?.pause();
     try {
       process.stdout.write("\n");
       return await term.select(label, choices, fallback);
     } finally {
-      rl.resume();
+      rl?.resume();
     }
   }
   const values = choices.map((choice) => typeof choice === "string" ? choice : choice.value);
+  if (!rl) return values.includes(fallback) ? fallback : values[0];
   const normalized = values.join("/");
   while (true) {
     const value = (await askDefault(rl, `${label} (${normalized})`, fallback)).trim();
@@ -625,10 +626,10 @@ async function plan(flags) {
     try {
       term.heading("build_fast plan", path.basename(project));
       goal = await askLongText(rl, "What do you want to build?", existing?.goal || "");
-      type = await askChoice(rl, "Work type", type, ["feature", "bug", "chore", "refactor", "project", "init", "overhaul"]);
     } finally {
       rl.close();
     }
+    type = await askChoice(null, "Work type", type, ["feature", "bug", "chore", "refactor", "project", "init", "overhaul"]);
     if (isMultiSpecType(type)) return planProgram({ config, notionUrl, type, project, flags: { ...flags, goal } });
   }
   if (!goal) throw new Error("Missing required flag: --goal");

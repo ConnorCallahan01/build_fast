@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { askLongText } from "../src/commands.js";
+import { askChoice, askLongText } from "../src/commands.js";
 
 const questions = [];
 const answers = [
@@ -40,5 +40,8 @@ assert.equal(value, [
 assert.deepEqual(questions, ["> ", "", "", "", "", ""]);
 
 assert.equal(fallback, "Existing goal");
+
+const chosen = await askChoice(null, "Work type", "project", ["feature", "project"]);
+assert.equal(chosen, "project");
 
 console.log("long text tests passed");
