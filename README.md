@@ -18,11 +18,12 @@ Modern coding agents are powerful, but they still need good direction, clean tas
 - run tasks in isolated git worktrees
 - collect the best integrated output
 - run feedback checks before calling the work done
+- create focused repair tasks when automated feedback fails
 - keep Notion updated with status, summaries, and task pages
 
 ## Current Status
 
-This is an MVP. It works locally, supports live Notion sync through the current Notion Data Sources API, and can run Claude Code workers non-interactively. It is not yet a packaged npm binary, and merge/PR automation is still on the roadmap.
+This is an MVP. It works locally, supports live Notion sync through the current Notion Data Sources API, can run Claude Code workers non-interactively, and can create repair tasks from failed feedback checks. It is not yet a packaged npm binary, and merge/PR automation is still on the roadmap.
 
 ## Requirements
 

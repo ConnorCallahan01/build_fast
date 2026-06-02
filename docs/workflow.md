@@ -76,6 +76,7 @@ node bin/build_fast.js drive \
 - overlay completed dependency outputs into dependent task worktrees
 - collect the recommended integrated task
 - run feedback checks
+- create a focused repair task when feedback checks fail, up to the configured repair limit
 - sync final status back to Notion
 
 Autopilot behavior:
@@ -185,6 +186,29 @@ node bin/build_fast.js drive \
 ```
 
 Program mode runs one dependency-ready spec at a time. Later specs receive the current target project snapshot so they can build on earlier collected output.
+
+## Feedback Repair
+
+When automated feedback checks fail, `drive` creates a new pending repair task instead of only stopping with an error. The repair task includes:
+
+- failed command
+- captured output/error detail
+- instructions to make the smallest coherent fix
+- acceptance criteria requiring the failed checks to pass
+
+Then rerun `drive`:
+
+```bash
+node bin/build_fast.js drive --ntn "$NTN" --autopilot junior_mode
+```
+
+The default repair limit is 2 attempts per spec. Override it with:
+
+```bash
+node bin/build_fast.js drive --ntn "$NTN" --max-repairs 3
+```
+
+Manual/browser/server checks are filtered from automated feedback where possible. Keep truly manual QA in the spec or Notion page, then verify it yourself after `drive`.
 
 ## Status Dashboard
 

@@ -21,7 +21,7 @@
 ### Safer Drive Mode
 
 - Improve feedback-loop command validation.
-- Make failed feedback checks easier to inspect and rerun.
+- Make failed feedback checks easier to inspect and rerun. MVP repair-task loop added.
 - Add clearer recovery commands after partial drive runs.
 - Add a `--dry-run` preview for drive orchestration.
 

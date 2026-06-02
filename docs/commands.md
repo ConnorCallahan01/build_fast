@@ -76,6 +76,14 @@ node bin/build_fast.js drive \
   --max-tasks 2
 ```
 
+Useful drive flags:
+
+| Flag | Purpose |
+| --- | --- |
+| `--max-iterations` | Maximum swarm/spec iterations before stopping |
+| `--max-repairs` | Maximum feedback repair tasks per spec, default `2` |
+| `--worker claude` | Select the current worker adapter |
+
 You can also drive directly from a goal string:
 
 ```bash
