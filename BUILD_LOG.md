@@ -485,3 +485,16 @@ Added:
 - Feedback command filtering now rejects server/manual/browser/curl/localhost checks and prose like `node --check on every new .js file`.
 
 This let the UI demo program recover from malformed feedback commands and continue through all three specs.
+
+### Step 33: Browser QA And Bug Ledger MVP
+
+Added the first explicit final-pass QA path:
+
+- `qa --type browser` starts the target project's `npm run demo` with a temporary `PORT`, waits for the local page, and checks for a browser-ready HTML demo with expected UI anchors and served JavaScript modules.
+- QA failures are logged to `.build_fast/specs/<target>/bugs.json`.
+- Feedback-loop failures are also logged to the same bug ledger before creating repair tasks.
+- `bugs --ntn <target>` lists logged bugs.
+- `bugs --ntn <target> --create-tasks` converts open bugs into pending `[bug]` Spec Tasks and syncs them to Notion, giving each bug a fresh worker pass.
+- Duplicate bug entries are deduped across reruns by source/title/details/command/spec.
+
+The current Notion behavior uses the existing Spec Tasks data source for bug-fix work. A dedicated Notion Bugs database remains a roadmap item.

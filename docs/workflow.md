@@ -6,6 +6,17 @@ The recommended loop is:
 goal contract -> repo-aware plan -> Notion sync -> worker swarm -> collect -> feedback checks -> Notion sync
 ```
 
+The failure recovery path is:
+
+```text
+feedback/QA failure
+  -> local bug ledger
+  -> pending bug-fix Spec Task
+  -> fresh worker worktree
+  -> collect + checks
+  -> Notion sync
+```
+
 ## Recommended Workflow
 
 ### 1. Shape The Goal
@@ -209,6 +220,42 @@ node bin/build_fast.js drive --ntn "$NTN" --max-repairs 3
 ```
 
 Manual/browser/server checks are filtered from automated feedback where possible. Keep truly manual QA in the spec or Notion page, then verify it yourself after `drive`.
+
+## Browser QA And Final Bug Pass
+
+Use this after a UI/demo-oriented run. The current browser QA MVP assumes the target project has an `npm run demo` script that starts a local static server and honors the `PORT` environment variable.
+
+```bash
+node bin/build_fast.js qa --ntn "$NTN" --type browser
+```
+
+The QA command starts the demo, waits for the page, fetches the HTML, and checks for:
+
+- a valid HTML page
+- expected form/list/search/tag anchors
+- a module script for the browser app
+- served core and app JavaScript modules
+
+If checks fail, bugs are logged locally:
+
+```bash
+node bin/build_fast.js bugs --ntn "$NTN"
+```
+
+Turn those bugs into Notion-backed repair work:
+
+```bash
+node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
+node bin/build_fast.js drive --ntn "$NTN" --autopilot junior_mode --permission-profile managed
+```
+
+You can combine QA failure logging and task creation:
+
+```bash
+node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
+```
+
+This gives failed UI/server checks their own fresh worker instances instead of asking the same worker to keep patching in place.
 
 ## Status Dashboard
 

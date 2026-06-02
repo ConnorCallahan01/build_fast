@@ -22,8 +22,17 @@
 
 - Improve feedback-loop command validation.
 - Make failed feedback checks easier to inspect and rerun. MVP repair-task loop added.
+- Log feedback and QA bugs into a ledger and convert them into final-pass fix tasks. MVP added.
 - Add clearer recovery commands after partial drive runs.
 - Add a `--dry-run` preview for drive orchestration.
+- Run final-pass bug workers automatically at the end of `drive`.
+
+### Browser QA
+
+- Add structured browser QA for static demo apps. MVP added.
+- Capture screenshots and DOM snapshots for failed UI checks.
+- Support project-specific QA profiles instead of Orbit-style default anchors.
+- Add Playwright-backed interaction checks when dependencies are available.
 
 ### Better Collection
 
@@ -80,6 +89,7 @@
 - Generate the Notion database structure automatically where possible.
 - Provide importable Notion templates.
 - Validate and repair property mismatches.
+- Add an optional dedicated Bugs data source for QA/final-pass failures.
 
 ## Non-Goals For Now
 

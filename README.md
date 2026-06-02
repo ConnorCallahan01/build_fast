@@ -19,11 +19,12 @@ Modern coding agents are powerful, but they still need good direction, clean tas
 - collect the best integrated output
 - run feedback checks before calling the work done
 - create focused repair tasks when automated feedback fails
+- log QA/feedback bugs for a final fix pass
 - keep Notion updated with status, summaries, and task pages
 
 ## Current Status
 
-This is an MVP. It works locally, supports live Notion sync through the current Notion Data Sources API, can run Claude Code workers non-interactively, and can create repair tasks from failed feedback checks. It is not yet a packaged npm binary, and merge/PR automation is still on the roadmap.
+This is an MVP. It works locally, supports live Notion sync through the current Notion Data Sources API, can run Claude Code workers non-interactively, can create repair tasks from failed feedback checks, and includes a browser QA/bug-ledger path for final-pass fixes. It is not yet a packaged npm binary, and deeper GitHub/CI automation is still on the roadmap.
 
 ## Requirements
 
@@ -104,9 +105,38 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 | `compact` | Keep Notion task pages readable by refreshing managed snapshots |
 | `cleanup` | Remove recorded worktrees and branches |
 | `review` | Run a Claude-backed review prompt |
+| `qa` | Run structured QA checks, currently browser demo checks |
+| `bugs` | Inspect logged QA/feedback bugs or convert them into fix tasks |
 | `stop` | Mark active workers stopped in local state |
 | `ship` | Preview or apply branch/commit/push/PR handoff |
 | `workers` | List supported worker adapters |
+
+## Final QA And Bug Fix Pass
+
+After a feature/program run, use browser QA when the target project exposes a static demo through `npm run demo`:
+
+```bash
+node bin/build_fast.js qa --ntn "$NTN" --type browser
+```
+
+If QA fails, `build_fast` writes bugs to the local ledger for that Notion target:
+
+```bash
+node bin/build_fast.js bugs --ntn "$NTN"
+```
+
+Convert open bugs into normal pending Spec Tasks, sync them to Notion, then drive fresh workers to fix them:
+
+```bash
+node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
+node bin/build_fast.js drive --ntn "$NTN" --autopilot junior_mode --permission-profile managed
+```
+
+For one-command QA-to-task creation:
+
+```bash
+node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
+```
 
 ## Notion Setup
 
@@ -153,7 +183,8 @@ node bin/build_fast.js drive --ntn local-smoke --from-goal --no-agent
 
 - Claude Code is the only worker adapter.
 - Notion mapping expects the current `Specs` and `Spec Tasks` data-source shape.
-- Merge/PR automation is not implemented.
+- Logged bugs are stored locally and converted into Notion Spec Tasks; a dedicated Notion Bugs database is planned.
+- Merge/PR automation is currently a `ship` preview/apply handoff rather than a full release manager.
 - Review support is still basic.
 - TypeScript/package distribution is deferred.
 

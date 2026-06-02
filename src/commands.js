@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { cp, mkdir, rm, realpath } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
@@ -51,6 +51,10 @@ export async function dispatch(command, flags) {
       return stop(flags);
     case "review":
       return review(flags);
+    case "qa":
+      return qa(flags);
+    case "bugs":
+      return bugs(flags);
     case "ship":
       return ship(flags);
     case "workers":
@@ -624,7 +628,7 @@ async function drive(flags) {
     console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
   }
   if (checks.some((check) => !check.ok)) {
-    const repaired = addFeedbackRepairTask(refreshed, checks, flags);
+    const repaired = await addFeedbackBugAndRepair(config, notionUrl, refreshed, checks, flags);
     if (repaired) {
       await saveSpec(config, notionUrl, repaired);
       console.log(`Created ${repaired.tasks.at(-1).id} to repair failed feedback checks. Rerun drive to continue.`);
@@ -746,7 +750,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
     }
     if (checks.some((check) => !check.ok)) {
-      const repaired = addFeedbackRepairTask(completedSpec, checks, flags);
+      const repaired = await addFeedbackBugAndRepair(config, notionUrl, completedSpec, checks, flags);
       if (repaired) {
         await saveSpec(config, notionUrl, repaired);
         console.log(`Created ${repaired.tasks.at(-1).id} to repair failed feedback checks for ${nextSpec.id}. Continuing.`);
@@ -844,6 +848,21 @@ function addFeedbackRepairTask(spec, checks, flags = {}) {
     tasks: [...(spec.tasks || []), task],
     updatedAt: nowIso()
   };
+}
+
+async function addFeedbackBugAndRepair(config, notionUrl, spec, checks, flags = {}) {
+  const failed = checks.filter((check) => !check.ok);
+  for (const check of failed) {
+    await appendBug(config, notionUrl, {
+      source: "feedback",
+      title: `Feedback failed: ${check.command}`,
+      details: check.detail,
+      command: check.command,
+      specId: spec.id,
+      status: "open"
+    });
+  }
+  return addFeedbackRepairTask(spec, checks, flags);
 }
 
 async function runFeedbackLoops(spec) {
@@ -2313,6 +2332,244 @@ function addReviewTasks(spec, parsed = {}, reviewType) {
     });
   }
   return { ...spec, tasks, status: spec.status === "completed" ? "planned" : spec.status, updatedAt: nowIso() };
+}
+
+async function qa(flags) {
+  const config = await loadConfig();
+  const notionUrl = requireFlag(flags, "ntn");
+  const type = optionalString(flags, "type", "browser");
+  const target = await loadActiveTarget(config, notionUrl);
+  if (!target) throw new Error("No local spec or program found. Run plan/drive first.");
+  if (type !== "browser") throw new Error(`Unsupported QA type: ${type}. Current MVP supports --type browser.`);
+
+  const result = await runBrowserQa(target.project, flags);
+  for (const check of result.checks) {
+    console.log(`${check.ok ? "OK " : "ERR"} ${check.name}: ${check.detail}`);
+  }
+
+  const failed = result.checks.filter((check) => !check.ok);
+  if (failed.length) {
+    for (const check of failed) {
+      await appendBug(config, notionUrl, {
+        source: "browser_qa",
+        title: `Browser QA failed: ${check.name}`,
+        details: check.detail,
+        command: check.command || "node bin/build_fast.js qa --type browser",
+        specId: target.id,
+        status: "open"
+      });
+    }
+    if (flags["create-task"] || flags["create-tasks"]) {
+      const updated = await addOpenBugTasks(config, notionUrl, target);
+      if (updated) {
+        await saveSpec(config, notionUrl, updated);
+        await sync({ ntn: notionUrl });
+      }
+    }
+    throw new Error(`Browser QA failed with ${failed.length} issue${failed.length === 1 ? "" : "s"}.`);
+  }
+
+  console.log(`Browser QA passed: ${result.url}`);
+}
+
+async function runBrowserQa(projectDir, flags = {}) {
+  const packageJson = await readJson(path.join(projectDir, "package.json"), {});
+  const checks = [];
+  if (!packageJson.scripts?.demo) {
+    return {
+      url: null,
+      checks: [{ name: "demo script", ok: false, detail: "package.json has no scripts.demo" }]
+    };
+  }
+
+  const port = Number(optionalString(flags, "port", String(19000 + Math.floor(Math.random() * 1000))));
+  const url = `http://127.0.0.1:${port}/`;
+  const child = spawn("npm", ["run", "demo"], {
+    cwd: projectDir,
+    env: { ...process.env, PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+  child.stderr.on("data", (chunk) => { output += chunk.toString(); });
+
+  try {
+    const ready = await waitForHttp(url, 8000);
+    checks.push({ name: "demo server", ok: ready.ok, detail: ready.detail, command: "npm run demo" });
+    if (!ready.ok) return { url, checks };
+
+    const htmlResponse = await fetch(url);
+    const html = await htmlResponse.text();
+    checks.push({ name: "index.html", ok: htmlResponse.ok && /<!doctype html/i.test(html), detail: `${htmlResponse.status} ${htmlResponse.headers.get("content-type") || ""}` });
+    checks.push({ name: "create note form", ok: hasAll(html, ["note-title", "note-body", "note-tags", "create-form"]), detail: "expected title/body/tags/create form anchors" });
+    checks.push({ name: "search and tag UI", ok: hasAll(html, ["search-input", "tag-filter", "notes-list"]), detail: "expected search/tag/list anchors" });
+    checks.push({ name: "module script", ok: hasModuleScript(html, "./app.js"), detail: "expected demo/app.js module script" });
+
+    const moduleResponse = await fetch(new URL("/src/orbit-notes.js", url));
+    checks.push({
+      name: "core module served",
+      ok: moduleResponse.ok && /javascript|ecmascript/.test(moduleResponse.headers.get("content-type") || ""),
+      detail: `${moduleResponse.status} ${moduleResponse.headers.get("content-type") || ""}`
+    });
+
+    const appResponse = await fetch(new URL("/demo/app.js", url));
+    checks.push({
+      name: "app module served",
+      ok: appResponse.ok && /javascript|ecmascript/.test(appResponse.headers.get("content-type") || ""),
+      detail: `${appResponse.status} ${appResponse.headers.get("content-type") || ""}`
+    });
+  } catch (error) {
+    checks.push({ name: "browser QA runtime", ok: false, detail: error.message || String(error) });
+  } finally {
+    child.kill("SIGTERM");
+  }
+
+  if (output && checks.some((check) => !check.ok)) {
+    checks.push({ name: "server output", ok: true, detail: firstOutputLine(output) });
+  }
+
+  return { url, checks };
+}
+
+function hasAll(value, needles) {
+  return needles.every((needle) => value.includes(needle));
+}
+
+function hasModuleScript(html, src) {
+  const scripts = html.match(/<script\b[^>]*>/gi) || [];
+  return scripts.some((script) => {
+    const hasType = /\btype=["']module["']/.test(script);
+    const hasSrc = new RegExp(`\\bsrc=["']${src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(script);
+    return hasType && hasSrc;
+  });
+}
+
+async function waitForHttp(url, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      return { ok: response.ok, detail: `${response.status} ${response.headers.get("content-type") || ""}` };
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  return { ok: false, detail: `server did not respond at ${url}` };
+}
+
+async function bugs(flags) {
+  const config = await loadConfig();
+  const notionUrl = requireFlag(flags, "ntn");
+  const items = await readBugs(config, notionUrl);
+  if (flags["create-tasks"] || flags["create-task"]) {
+    const target = await loadActiveTarget(config, notionUrl);
+    if (!target) throw new Error("No active spec found. Run plan/drive first.");
+    const updated = await addOpenBugTasks(config, notionUrl, target);
+    if (updated) {
+      await saveSpec(config, notionUrl, updated);
+      await sync({ ntn: notionUrl });
+      console.log("Created bug repair tasks from open bugs.");
+      return;
+    }
+    console.log("No open bugs without tasks.");
+    return;
+  }
+
+  if (!items.length) {
+    console.log("No bugs logged.");
+    return;
+  }
+  for (const bug of items) {
+    const task = bug.taskId ? ` task=${bug.taskId}` : "";
+    console.log(`${bug.status || "open"} ${bug.id} [${bug.source}] ${bug.title}${task}`);
+    if (bug.details) console.log(`  ${bug.details}`);
+  }
+}
+
+async function loadActiveTarget(config, notionUrl) {
+  const spec = await loadSpec(config, notionUrl);
+  if (spec) return spec;
+  const program = await loadProgram(config, notionUrl);
+  if (!program?.specs?.length) return undefined;
+  const active = program.specs.find((candidate) => candidate.status === "in_progress")
+    || program.specs.find((candidate) => candidate.status === "planned")
+    || program.specs.at(-1);
+  return programToStandaloneSpec(program, active);
+}
+
+function bugsPath(config, notionUrl) {
+  return path.join(specDir(config, notionUrl), "bugs.json");
+}
+
+async function readBugs(config, notionUrl) {
+  return readJson(bugsPath(config, notionUrl), []);
+}
+
+async function saveBugs(config, notionUrl, bugs) {
+  await writeJson(bugsPath(config, notionUrl), bugs);
+}
+
+async function appendBug(config, notionUrl, bug) {
+  const bugs = await readBugs(config, notionUrl);
+  const existing = bugs.find((candidate) =>
+    candidate.source === bug.source
+    && candidate.title === bug.title
+    && candidate.details === bug.details
+    && candidate.command === bug.command
+    && candidate.specId === bug.specId
+  );
+  if (existing) return existing;
+  const id = `bug-${String(bugs.length + 1).padStart(3, "0")}`;
+  const next = {
+    id,
+    status: "open",
+    createdAt: nowIso(),
+    ...bug
+  };
+  await saveBugs(config, notionUrl, [...bugs, next]);
+  return next;
+}
+
+async function addOpenBugTasks(config, notionUrl, spec) {
+  const bugs = await readBugs(config, notionUrl);
+  const open = bugs.filter((bug) => (bug.status || "open") === "open" && !bug.taskId);
+  if (!open.length) return null;
+  let nextSpec = spec;
+  let nextOrder = (nextSpec.tasks || []).reduce((max, task) => Math.max(max, task.order || 0), 0) + 1;
+  const updatedBugs = bugs.map((bug) => {
+    if (!open.some((candidate) => candidate.id === bug.id)) return bug;
+    const taskId = `task-${String(nextOrder).padStart(3, "0")}`;
+    const dependencies = (nextSpec.tasks || []).filter((task) => task.status === "completed").map((task) => task.id);
+    const task = {
+      id: taskId,
+      title: `[bug] ${bug.title}`,
+      status: "pending",
+      order: nextOrder,
+      kind: "bug_fix",
+      objective: bug.details || bug.title,
+      instructions: [
+        "Fix the logged bug below with a fresh focused pass.",
+        `Source: ${bug.source || "unknown"}`,
+        bug.command ? `Command/check: ${bug.command}` : null,
+        bug.details ? `Details: ${bug.details}` : null,
+        "Make the smallest coherent fix and rerun the relevant checks."
+      ].filter(Boolean).join("\n"),
+      acceptanceCriteria: [
+        "The logged bug is fixed.",
+        "Relevant automated checks pass.",
+        "No unrelated behavior is changed."
+      ],
+      testPlan: bug.command ? [bug.command] : nextSpec.feedbackLoops || nextSpec.repoContext?.feedbackLoops || ["Run relevant checks."],
+      risk: "medium",
+      dependencies,
+      createdAt: nowIso()
+    };
+    nextSpec = { ...nextSpec, status: "planned", tasks: [...(nextSpec.tasks || []), task], updatedAt: nowIso() };
+    nextOrder += 1;
+    return { ...bug, taskId, status: "task_created", updatedAt: nowIso() };
+  });
+  await saveBugs(config, notionUrl, updatedBugs);
+  return nextSpec;
 }
 
 async function workers(flags) {

@@ -151,6 +151,36 @@ Create follow-up tasks from review findings:
 node bin/build_fast.js review --ntn "$NTN" --type pr_readiness --create-tasks
 ```
 
+## QA And Bug Ledger
+
+Run browser QA against the active spec/program project:
+
+```bash
+node bin/build_fast.js qa --ntn "$NTN" --type browser
+```
+
+The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, and served JavaScript modules.
+
+Create bug-fix tasks immediately when QA fails:
+
+```bash
+node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
+```
+
+List logged bugs:
+
+```bash
+node bin/build_fast.js bugs --ntn "$NTN"
+```
+
+Convert open bugs into pending Spec Tasks and sync them to Notion:
+
+```bash
+node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
+```
+
+The bug ledger is stored at `.build_fast/specs/<target>/bugs.json`. Today those bugs become normal Spec Tasks in Notion. A dedicated Notion Bugs database is planned.
+
 ## Workers
 
 ```bash

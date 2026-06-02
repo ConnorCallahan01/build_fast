@@ -136,6 +136,8 @@ Commands:
   inspect --ntn <notion-url>
   stop   --ntn <notion-url>
   review --ntn <notion-url> --type pr_readiness [--create-tasks]
+  qa     --ntn <notion-url> --type browser [--create-task]
+  bugs   --ntn <notion-url> [--create-tasks]
   ship   --ntn <notion-url> [--branch build-fast/name] [--apply] [--pr]
   workers [--worker claude]
 
