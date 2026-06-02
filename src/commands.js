@@ -4050,7 +4050,7 @@ async function runBrowserQa(target, flags = {}) {
   const projectDir = target.project || target;
   const profile = browserQaProfile(target, flags);
   const packageJson = await readJson(path.join(projectDir, "package.json"), {});
-  const checks = [];
+  let checks = [];
   const startCommand = profile.startCommand || (packageJson.scripts?.demo ? "npm run demo" : "");
   if (!startCommand) {
     return {
@@ -4086,6 +4086,7 @@ async function runBrowserQa(target, flags = {}) {
     if (profile.render !== false || flags["require-playwright"]) {
       const rendered = await runPlaywrightBrowserQa(url, profile, flags, projectDir);
       checks.push(...rendered.checks);
+      checks = reconcileRenderedBrowserQaChecks(checks);
       if (rendered.console.length) checks.push({ name: "browser console", ok: false, detail: rendered.console.join(" | ") });
       if (rendered.pageErrors.length) checks.push({ name: "browser page errors", ok: false, detail: rendered.pageErrors.join(" | ") });
       if (rendered.screenshotBase64) screenshotBase64 = rendered.screenshotBase64;
@@ -4177,6 +4178,23 @@ export async function browserQaHtmlChecks(html, url, profile, fetchImpl = fetch)
   return checks;
 }
 
+export function reconcileRenderedBrowserQaChecks(checks = []) {
+  const renderedPasses = new Set(checks.filter((check) => check.ok && (check.name.startsWith("rendered text ") || check.name.startsWith("rendered selector "))).map((check) => check.name));
+  if (!renderedPasses.size) return checks;
+  return checks.map((check) => {
+    if (check.ok) return check;
+    if (check.name.startsWith("required text ")) {
+      const text = check.name.slice("required text ".length);
+      if (renderedPasses.has(`rendered text ${text}`)) return { ...check, ok: true, detail: `${check.detail}; passed after render` };
+    }
+    if (check.name.startsWith("required selector ")) {
+      const selector = check.name.slice("required selector ".length);
+      if (renderedPasses.has(`rendered selector ${selector}`)) return { ...check, ok: true, detail: `${check.detail}; passed after render` };
+    }
+    return check;
+  });
+}
+
 async function runPlaywrightBrowserQa(url, profile, flags = {}, projectDir = process.cwd()) {
   const requirePlaywright = flags["require-playwright"] === true || flags["require-playwright"] === "true";
   let playwright;
@@ -4242,9 +4260,11 @@ async function runBrowserInteraction(page, interaction) {
       } else if (step.action === "click") {
         await page.locator(step.selector).first().click({ timeout: step.timeout });
       } else if (step.action === "expectText") {
+        await page.getByText(step.text || step.value, { exact: false }).first().waitFor({ state: "visible", timeout: step.timeout });
         const count = await page.getByText(step.text || step.value, { exact: false }).count();
         if (!count) throw new Error(`missing text: ${step.text || step.value}`);
       } else if (step.action === "expectSelector") {
+        await page.locator(step.selector).first().waitFor({ state: "attached", timeout: step.timeout });
         const count = await page.locator(step.selector).count();
         if (!count) throw new Error(`missing selector: ${step.selector}`);
       } else {

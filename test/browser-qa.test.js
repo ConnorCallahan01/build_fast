@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { browserQaHtmlChecks, browserQaProfile, checkHtmlAssets, htmlAssetReferences } from "../src/commands.js";
+import { browserQaHtmlChecks, browserQaProfile, checkHtmlAssets, htmlAssetReferences, reconcileRenderedBrowserQaChecks } from "../src/commands.js";
 
 const baseUrl = "http://127.0.0.1:8080/";
 
@@ -106,5 +106,14 @@ const missingSelectorChecks = await browserQaHtmlChecks(`
 <script type="module" src="/demo/app.js"></script>
 `, baseUrl, profile, fakeFetch);
 assert.equal(missingSelectorChecks.find((check) => check.name === "required selector .hero").ok, false);
+
+const reconciledChecks = reconcileRenderedBrowserQaChecks([
+  { name: "required text Temperature deviation", ok: false, detail: "Temperature deviation" },
+  { name: "required selector .patient-row", ok: false, detail: ".patient-row" },
+  { name: "rendered text Temperature deviation", ok: true, detail: "1 match" },
+  { name: "rendered selector .patient-row", ok: true, detail: "3 matches" }
+]);
+assert.equal(reconciledChecks.find((check) => check.name === "required text Temperature deviation").ok, true);
+assert.equal(reconciledChecks.find((check) => check.name === "required selector .patient-row").ok, true);
 
 console.log("browser QA tests passed");
