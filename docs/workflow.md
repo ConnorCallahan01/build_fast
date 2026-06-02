@@ -72,6 +72,7 @@ After approving the goal:
 node bin/build_fast.js drive \
   --ntn "$NTN" \
   --from-goal \
+  --parallel smart \
   --autopilot junior_mode \
   --permission-profile managed \
   --concurrency 2 \
@@ -84,6 +85,7 @@ node bin/build_fast.js drive \
 - scan the repo and feed project context into planning
 - sync spec/tasks to Notion
 - run dependency-ready tasks in worktrees
+- group ready tasks conservatively when `--parallel smart` is enabled
 - overlay completed dependency outputs into dependent task worktrees
 - collect the recommended integrated task
 - run feedback checks
@@ -97,6 +99,29 @@ Autopilot behavior:
 | `intern_mode` | Stops before applying collection |
 | `junior_mode` | Applies the recommended integrated task when clear |
 | `boss_mode` | Intended for more aggressive automation; currently similar to `junior_mode` for collection |
+
+## Smart Parallel Execution
+
+Use smart parallel mode when a spec has multiple independent tasks and you want faster worker throughput:
+
+```bash
+node bin/build_fast.js drive \
+  --ntn "$NTN" \
+  --from-goal \
+  --parallel smart \
+  --concurrency 4 \
+  --max-tasks 4 \
+  --autopilot junior_mode \
+  --permission-profile managed
+```
+
+Smart mode uses three layers of protection:
+
+- planner hints: `expectedFiles` and `parallelGroup`
+- local heuristics: high-risk, integration, final verification, and repair tasks are serialized
+- collect recovery: if parallel outputs overlap anyway, `drive` creates a serial integration task instead of choosing one output blindly
+
+The default mode remains unchanged. Use plain `drive` or `swarm` without `--parallel smart` when you want the existing dependency-ready batching behavior.
 
 ### 3. Verify The Target Project
 

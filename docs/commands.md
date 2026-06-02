@@ -70,6 +70,7 @@ node bin/build_fast.js program \
 node bin/build_fast.js drive \
   --ntn "$NTN" \
   --from-goal \
+  --parallel smart \
   --autopilot junior_mode \
   --permission-profile managed \
   --concurrency 2 \
@@ -83,6 +84,7 @@ Useful drive flags:
 | `--max-iterations` | Maximum swarm/spec iterations before stopping |
 | `--max-repairs` | Maximum feedback repair tasks per spec, default `2` |
 | `--worker claude` | Select the current worker adapter |
+| `--parallel smart` | Group ready tasks conservatively using expected files, parallel groups, risk, and task type |
 
 You can also drive directly from a goal string:
 
@@ -101,9 +103,12 @@ node bin/build_fast.js swarm \
   --ntn "$NTN" \
   --concurrency 2 \
   --max-tasks 2 \
+  --parallel smart \
   --autopilot junior_mode \
   --permission-profile managed
 ```
+
+`--parallel smart` only changes which ready tasks are selected for a swarm batch. It does not change the worker runtime. Smart mode defers serial/high-risk/integration tasks, avoids known expected-file overlaps, and prints the selected group before workers start.
 
 ## Collect Output
 

@@ -509,3 +509,16 @@ Hardened the `ship` command so it can complete the handoff from local collected 
 - If PR creation fails because a PR already exists, `ship` attempts to recover the existing PR URL.
 - Ship metadata now records branch, commit, repo URL, PR URL, message, and timestamp in local spec/program state.
 - Notion sync now writes `GitHub Repo` and `GitHub PR` properties when those fields exist, then appends a ship summary.
+
+### Step 35: Smart Parallel Execution MVP
+
+Added a conservative smart parallel mode for faster worker runs without blindly increasing merge risk:
+
+- Planner prompts now request `expectedFiles` and `parallelGroup` for every task.
+- The ledger preserves those fields for single-spec and program tasks.
+- `drive` and `swarm` accept `--parallel smart`.
+- Smart mode selects dependency-ready tasks using expected-file overlap, parallel group, risk, and task-type heuristics.
+- High-risk, serial, integration, final verification, repair, and same-area unknown-file tasks are deferred instead of batched.
+- Smart swarm prints the selected group and deferred tasks before workers start.
+- If completed smart-parallel outputs overlap during collect, `drive` creates a serial `parallel_integration` task with the overlapping files and dependency task IDs.
+- Added regression coverage for smart task selection and integration-task creation.

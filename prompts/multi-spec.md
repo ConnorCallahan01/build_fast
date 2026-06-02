@@ -37,7 +37,9 @@ The user has given a large goal that needs to be broken into multiple sequential
           "acceptanceCriteria": ["observable completion condition"],
           "testPlan": ["specific test/check command or manual verification"],
           "risk": "low|medium|high",
-          "dependencies": []
+          "dependencies": [],
+          "expectedFiles": ["likely relative files or directories this task will touch"],
+          "parallelGroup": "short group label for tasks that can safely run together, or serial"
         }
       ]
     }
@@ -53,6 +55,8 @@ Planning rules:
 - Late specs should add features, polish, and integrate everything.
 - Within each spec, make tasks small enough for one fresh Claude Code invocation.
 - Prefer risky/foundational tasks early within each spec.
+- Include expectedFiles for each task so build_fast can avoid parallel workers editing the same files.
+- Use parallelGroup to mark safe parallel batches. Use "serial" for integration, shared-file, risky, or final verification tasks.
 - Include feedback loops that prove done at the program level.
 - Use the detected project scripts and files instead of generic test instructions.
 - Do not write code during planning.

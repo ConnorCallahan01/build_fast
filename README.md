@@ -72,6 +72,7 @@ node bin/build_fast.js drive \
   --from-goal \
   --autopilot junior_mode \
   --permission-profile managed \
+  --parallel smart \
   --concurrency 2 \
   --max-tasks 2
 ```
@@ -99,7 +100,7 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 | `plan` | Generate a repo-aware spec and task plan |
 | `sync` | Push local spec/task state to Notion |
 | `drive` | Run planning, sync, swarm, collect, checks, and final sync |
-| `swarm` | Run dependency-ready tasks in isolated worktrees |
+| `swarm` | Run dependency-ready tasks in isolated worktrees, optionally with smart parallel grouping |
 | `collect` | Inspect or apply completed task output |
 | `status` | Show spec, task, feedback, worker, and collect state |
 | `compact` | Keep Notion task pages readable by refreshing managed snapshots |
@@ -137,6 +138,23 @@ For one-command QA-to-task creation:
 ```bash
 node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
 ```
+
+## Smart Parallel Runs
+
+Use smart parallel mode when you want more agents running at once without blindly launching tasks that are likely to edit the same files:
+
+```bash
+node bin/build_fast.js drive \
+  --ntn "$NTN" \
+  --from-goal \
+  --parallel smart \
+  --concurrency 4 \
+  --max-tasks 4 \
+  --autopilot junior_mode \
+  --permission-profile managed
+```
+
+In smart mode, planners include `expectedFiles` and `parallelGroup` hints. `swarm` uses those hints plus file/area heuristics to defer risky, high-risk, serial, or overlapping tasks. If completed parallel workers still overlap, `drive` creates a serial integration task so a fresh worker can merge the outputs deliberately.
 
 ## Ship To GitHub
 

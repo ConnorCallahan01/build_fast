@@ -555,6 +555,7 @@ async function drive(flags) {
   const permissionProfile = optionalString(flags, "permission-profile", "managed");
   const concurrency = optionalString(flags, "concurrency", "2");
   const maxTasks = optionalString(flags, "max-tasks", concurrency);
+  const parallel = optionalString(flags, "parallel", "default");
 
   let config = await ensureConfig();
   const goalContract = flags["from-goal"] ? await loadGoalContract(config, notionUrl) : undefined;
@@ -593,7 +594,7 @@ async function drive(flags) {
     spec = await loadSpec(config, notionUrl);
     const pending = readyPendingTasks(spec);
     if (!pending.length) break;
-    await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks });
+    await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks, parallel });
     iterations += 1;
   }
 
@@ -608,6 +609,15 @@ async function drive(flags) {
     if (collection.overlaps.length) {
       console.log("Overlapping changed files detected:");
       for (const overlap of collection.overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
+    }
+    if (parallel === "smart" && collection.overlaps.length) {
+      const integrated = addParallelIntegrationTask(spec, collection);
+      if (integrated) {
+        await saveSpec(config, notionUrl, integrated);
+        console.log(`Created ${integrated.tasks.at(-1).id} to integrate overlapping parallel outputs. Rerun drive to continue.`);
+        await sync({ ntn: notionUrl });
+        return;
+      }
     }
 
     const shouldApply = shouldDriveApply(autopilot, collection);
@@ -698,7 +708,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       let currentSpec = await loadSpec(config, notionUrl);
       const pending = readyPendingTasks(currentSpec);
       if (!pending.length) break;
-      await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks });
+      await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks, parallel: optionalString(flags, "parallel", "default") });
       specIterations += 1;
     }
 
@@ -709,6 +719,14 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
 
     const collection = await collectSummary(config, notionUrl, completedSpec, undefined, { uncollectedOnly: true, skipMissing: true });
     if (collection.reports.length) {
+      if (optionalString(flags, "parallel", "default") === "smart" && collection.overlaps.length) {
+        const integrated = addParallelIntegrationTask(completedSpec, collection);
+        if (integrated) {
+          await saveSpec(config, notionUrl, integrated);
+          console.log(`Created ${integrated.tasks.at(-1).id} to integrate overlapping parallel outputs for ${nextSpec.id}. Continuing.`);
+          continue;
+        }
+      }
       const projectRoot = completedSpec.project;
       const projectSubdir = normalizeProjectSubdir(completedSpec.repoContext?.projectRelativePath);
       const reportsToApply = collection.overlaps.length && collection.recommendation
@@ -803,6 +821,53 @@ function shouldDriveApply(autopilot, collection) {
     return { apply: true, taskId: collection.recommendation.task.id, reason: collection.recommendation.reason };
   }
   return { apply: false, reason: "overlapping task outputs need manual choice" };
+}
+
+export function addParallelIntegrationTask(spec, collection) {
+  if ((spec.tasks || []).some((task) => task.kind === "parallel_integration" && task.status !== "completed")) return null;
+  const reportsById = new Map(collection.reports.map((report) => [report.task.id, report]));
+  const dependencyIds = [...new Set(collection.overlaps.flatMap((overlap) => overlap.taskIds))].filter((taskId) => reportsById.has(taskId));
+  if (!dependencyIds.length) return null;
+
+  const existingIds = new Set((spec.tasks || []).map((task) => task.id));
+  let nextOrder = (spec.tasks || []).reduce((max, task) => Math.max(max, task.order || 0), 0) + 1;
+  while (existingIds.has(`task-${String(nextOrder).padStart(3, "0")}`)) nextOrder += 1;
+  const id = `task-${String(nextOrder).padStart(3, "0")}`;
+  const overlapLines = collection.overlaps.map((overlap) => `- ${overlap.file}: ${overlap.taskIds.join(", ")}`);
+
+  const task = {
+    id,
+    title: "Integrate overlapping parallel worker outputs",
+    status: "pending",
+    order: nextOrder,
+    kind: "parallel_integration",
+    objective: "Merge the best completed parallel worker outputs into one coherent implementation.",
+    instructions: [
+      "Inspect the dependency worktree overlays and integrate the overlapping outputs below.",
+      "Prefer preserving all correct behavior rather than choosing one task output blindly.",
+      "Keep the final implementation scoped to the original spec.",
+      "Overlapping files:",
+      ...overlapLines
+    ].join("\n"),
+    acceptanceCriteria: [
+      "Overlapping parallel outputs are integrated coherently.",
+      "No completed task's intended behavior is lost.",
+      "Relevant feedback checks pass."
+    ],
+    testPlan: spec.feedbackLoops?.length ? spec.feedbackLoops : spec.repoContext?.feedbackLoops || ["Run relevant checks."],
+    risk: "medium",
+    dependencies: dependencyIds,
+    expectedFiles: collection.overlaps.map((overlap) => overlap.file),
+    parallelGroup: "serial",
+    createdAt: nowIso()
+  };
+
+  return {
+    ...spec,
+    status: "planned",
+    tasks: [...(spec.tasks || []), task],
+    updatedAt: nowIso()
+  };
 }
 
 function addFeedbackRepairTask(spec, checks, flags = {}) {
@@ -942,10 +1007,11 @@ async function swarm(flags) {
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "inherit");
   const concurrency = Math.max(1, Number(optionalString(flags, "concurrency", "2")));
   const maxTasks = Math.max(1, Number(optionalString(flags, "max-tasks", String(concurrency))));
+  const parallelMode = optionalString(flags, "parallel", "default");
   let spec = await loadSpec(config, notionUrl);
   if (!spec) throw new Error("No local spec found. Run `build_fast plan --goal ... --ntn ... --project ...` first.");
 
-  const candidates = readyPendingTasks(spec).slice(0, maxTasks);
+  const candidates = selectSwarmCandidates(spec, { maxTasks, parallelMode });
   if (!candidates.length) {
     console.log("No dependency-ready pending tasks found.");
     return;
@@ -975,6 +1041,7 @@ async function swarm(flags) {
   await saveSpec(config, notionUrl, spec);
 
   console.log(`Swarm starting ${assignments.length} task${assignments.length === 1 ? "" : "s"} with concurrency ${concurrency}.`);
+  if (parallelMode === "smart") printSmartParallelPlan(spec, candidates);
   const results = await runWithConcurrency(assignments, concurrency, (assignment) =>
     runSwarmAssignment({ config, notionUrl, autopilot, permissionProfile, assignment })
   );
@@ -1010,6 +1077,116 @@ async function swarm(flags) {
   for (const result of results) {
     console.log(`${result.task.id} ${result.patch.status}: ${result.patch.summary || ""}`);
   }
+}
+
+export function selectSwarmCandidates(spec, { maxTasks, parallelMode = "default" }) {
+  const ready = readyPendingTasks(spec);
+  if (parallelMode !== "smart") return ready.slice(0, maxTasks);
+  return selectSmartParallelTasks(ready, maxTasks);
+}
+
+function selectSmartParallelTasks(ready, maxTasks) {
+  if (!ready.length) return [];
+  const first = ready[0];
+  if (isSerialTask(first)) return [first];
+
+  const selected = [first];
+  for (const task of ready.slice(1)) {
+    if (selected.length >= maxTasks) break;
+    if (isSerialTask(task)) break;
+    if (selected.every((candidate) => tasksCanRunTogether(candidate, task))) {
+      selected.push(task);
+    }
+  }
+  return selected;
+}
+
+function tasksCanRunTogether(a, b) {
+  const aGroup = normalizedParallelGroup(a);
+  const bGroup = normalizedParallelGroup(b);
+  if (aGroup && bGroup && aGroup !== bGroup) return false;
+
+  const aFiles = taskExpectedFiles(a);
+  const bFiles = taskExpectedFiles(b);
+  if (aFiles.length && bFiles.length && fileSetsOverlap(aFiles, bFiles)) return false;
+
+  const aArea = taskArea(a);
+  const bArea = taskArea(b);
+  if (!aFiles.length && !bFiles.length && aArea && bArea && aArea === bArea) return false;
+  return true;
+}
+
+function isSerialTask(task) {
+  const group = normalizedParallelGroup(task);
+  if (group === "serial") return true;
+  if (String(task.risk || "").toLowerCase() === "high") return true;
+  const text = `${task.kind || ""} ${task.title || ""} ${task.objective || ""}`.toLowerCase();
+  return /\b(integration|integrate|merge|final|verify|verification|test coverage|regression|repair)\b/.test(text);
+}
+
+function normalizedParallelGroup(task) {
+  const value = String(task.parallelGroup || task.parallel_group || "").trim().toLowerCase();
+  if (!value || value === "parallel" || value === "safe") return "";
+  return value;
+}
+
+function taskExpectedFiles(task) {
+  const explicit = [
+    ...(Array.isArray(task.expectedFiles) ? task.expectedFiles : []),
+    ...(Array.isArray(task.targetFiles) ? task.targetFiles : []),
+    ...(Array.isArray(task.files) ? task.files : [])
+  ].map(normalizeExpectedFile).filter(Boolean);
+  if (explicit.length) return [...new Set(explicit)];
+  return inferExpectedFiles(task);
+}
+
+function inferExpectedFiles(task) {
+  const text = `${task.title || ""}\n${task.objective || ""}\n${task.instructions || ""}\n${(task.testPlan || []).join("\n")}`.toLowerCase();
+  const files = [];
+  for (const match of text.matchAll(/\b([\w./-]+\.(?:js|jsx|ts|tsx|css|html|json|md|py|rb|go|rs|java|kt|swift|php|yml|yaml))\b/g)) {
+    files.push(normalizeExpectedFile(match[1]));
+  }
+  if (/\breadme|docs?|documentation\b/.test(text)) files.push("README.md", "docs/");
+  if (/\btest|tests?|coverage|spec\b/.test(text)) files.push("test/", "tests/", "__tests__/");
+  if (/\b(style|css|layout|ui|browser|html|page|component)\b/.test(text)) files.push("src/", "demo/", "public/");
+  return [...new Set(files.filter(Boolean))];
+}
+
+function normalizeExpectedFile(value) {
+  const file = String(value || "").trim().replace(/^\.\//, "");
+  if (!file || isUnsafeRelativePath(file)) return "";
+  return file;
+}
+
+function fileSetsOverlap(aFiles, bFiles) {
+  return aFiles.some((a) => bFiles.some((b) => filesOverlap(a, b)));
+}
+
+function filesOverlap(a, b) {
+  const left = a.endsWith("/") ? a : `${a}/`;
+  const right = b.endsWith("/") ? b : `${b}/`;
+  return a === b || left.startsWith(right) || right.startsWith(left);
+}
+
+function taskArea(task) {
+  const text = `${task.title || ""} ${task.objective || ""} ${task.instructions || ""}`.toLowerCase();
+  if (/\breadme|docs?|documentation\b/.test(text)) return "docs";
+  if (/\btest|tests?|coverage|spec\b/.test(text)) return "tests";
+  if (/\bcss|style|layout|visual|design\b/.test(text)) return "styles";
+  if (/\bhtml|browser|ui|component|page\b/.test(text)) return "ui";
+  if (/\bapi|server|route|backend\b/.test(text)) return "backend";
+  return "";
+}
+
+function printSmartParallelPlan(spec, candidates) {
+  console.log("Smart parallel selection:");
+  for (const task of candidates) {
+    const files = taskExpectedFiles(task);
+    const group = normalizedParallelGroup(task) || "auto";
+    console.log(`  ${task.id}: group=${group} risk=${task.risk || "medium"} files=${files.length ? files.join(", ") : "unknown"}`);
+  }
+  const skipped = readyPendingTasks(spec).filter((task) => !candidates.some((candidate) => candidate.id === task.id));
+  if (skipped.length) console.log(`  deferred: ${skipped.map((task) => task.id).join(", ")}`);
 }
 
 async function runSwarmAssignment({ config, notionUrl, autopilot, permissionProfile, assignment }) {

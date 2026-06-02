@@ -78,7 +78,9 @@ export function makeSpec({ goal, type, project, notionUrl, plan }) {
       acceptanceCriteria: task.acceptanceCriteria || [],
       testPlan: task.testPlan || [],
       risk: task.risk || "medium",
-      dependencies: task.dependencies || []
+      dependencies: task.dependencies || [],
+      expectedFiles: normalizeStringArray(task.expectedFiles || task.targetFiles || task.files),
+      parallelGroup: task.parallelGroup || task.parallel_group || ""
     })),
     createdAt: nowIso(),
     updatedAt: nowIso(),
@@ -119,7 +121,9 @@ export function makeProgram({ goal, type, project, notionUrl, plan }) {
         acceptanceCriteria: task.acceptanceCriteria || [],
         testPlan: task.testPlan || [],
         risk: task.risk || "medium",
-        dependencies: task.dependencies || []
+        dependencies: task.dependencies || [],
+        expectedFiles: normalizeStringArray(task.expectedFiles || task.targetFiles || task.files),
+        parallelGroup: task.parallelGroup || task.parallel_group || ""
       })),
       createdAt: nowIso(),
       updatedAt: nowIso()
@@ -142,6 +146,11 @@ export function makeProgram({ goal, type, project, notionUrl, plan }) {
     createdAt: nowIso(),
     updatedAt: nowIso()
   };
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
 export async function saveProgram(config, notionUrl, program, cwd = process.cwd()) {

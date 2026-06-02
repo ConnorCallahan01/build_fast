@@ -125,9 +125,9 @@ Commands:
                 project, refactor, init, overhaul (multi-spec program)
   tasks  --ntn <notion-url> [regenerates from an existing local spec]
   start  --goal "..." --ntn <notion-url> --project <dir> --type <type> --autopilot junior_mode
-  drive  --ntn <notion-url> [--goal "..." | --from-goal] [--project <dir>] [--type <type>]
+  drive  --ntn <notion-url> [--goal "..." | --from-goal] [--project <dir>] [--type <type>] [--parallel smart]
   run    --ntn <notion-url> [--autopilot intern_mode|junior_mode|boss_mode]
-  swarm  --ntn <notion-url> [--concurrency 2] [--max-tasks 2]
+  swarm  --ntn <notion-url> [--concurrency 2] [--max-tasks 2] [--parallel smart]
   status --ntn <notion-url> [--spec spec-001]
   sync   --ntn <notion-url> [--mode data-source|blocks]
   compact --ntn <notion-url> [--keep-runs 1]

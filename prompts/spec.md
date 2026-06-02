@@ -31,7 +31,9 @@ Use the repository context to create a useful implementation plan. Return only J
       "acceptanceCriteria": ["observable completion condition"],
       "testPlan": ["specific test/check command or manual verification"],
       "risk": "low|medium|high",
-      "dependencies": []
+      "dependencies": [],
+      "expectedFiles": ["likely relative files or directories this task will touch"],
+      "parallelGroup": "short group label for tasks that can safely run together, or serial"
     }
   ]
 }
@@ -42,5 +44,7 @@ Planning rules:
 - Include feedback loops that prove done.
 - Use the detected project scripts and files instead of generic test instructions.
 - Include dependencies when later tasks need earlier task output.
+- Include expectedFiles for each task so build_fast can avoid parallel workers editing the same files.
+- Use parallelGroup to mark safe parallel batches. Use "serial" for integration, shared-file, risky, or final verification tasks.
 - Avoid creating tasks that only restate the goal without codebase-specific guidance.
 - Do not write code during planning.

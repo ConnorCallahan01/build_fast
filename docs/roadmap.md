@@ -15,11 +15,13 @@
 
 - Improve repo scanning with better framework/test detection.
 - Generate task dependencies more reliably.
-- Add explicit integration tasks when parallel workers touch shared files.
+- Add expected-file and parallel-group hints for workers. MVP added.
+- Add explicit integration tasks when parallel workers touch shared files. MVP added for smart parallel mode.
 - Add plan quality checks before workers start.
 
 ### Safer Drive Mode
 
+- Add smart parallel execution for independent tasks. MVP `--parallel smart` added.
 - Improve feedback-loop command validation.
 - Make failed feedback checks easier to inspect and rerun. MVP repair-task loop added.
 - Log feedback and QA bugs into a ledger and convert them into final-pass fix tasks. MVP added.
