@@ -1841,7 +1841,7 @@ async function collect(flags) {
 
 async function collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter }) {
   const projectRoot = spec.project;
-  const projectSubdir = normalizeProjectSubdir(spec.repoContext?.projectRelativePath);
+  const projectSubdir = await projectSubdirForSpec(spec);
   const { reports, overlaps, recommendation } = await collectSummary(config, notionUrl, spec, taskFilter);
 
   if (!reports.length) {
@@ -1932,7 +1932,7 @@ async function diffFilesForPreview(targetPath, sourcePath, label) {
 
 async function collectSummary(config, notionUrl, spec, taskFilter = undefined, options = {}) {
   const coveredByCollected = collectedOverlayTaskIds(spec);
-  const projectRelativePath = normalizeProjectSubdir(spec.repoContext?.projectRelativePath || spec._program?.projectRelativePath);
+  const projectRelativePath = await projectSubdirForSpec(spec);
   const tasks = (spec.tasks || [])
     .filter((task) => task.status === "completed")
     .filter((task) => !taskFilter || task.id === taskFilter)
@@ -1941,7 +1941,7 @@ async function collectSummary(config, notionUrl, spec, taskFilter = undefined, o
   const reports = [];
   for (const task of tasks) {
     if (options.skipMissing && !(await pathExists(task.lastResult.worktree))) continue;
-    reports.push(await inspectCollectTask(task, projectRelativePath));
+    reports.push(await inspectCollectTask(task, projectRelativePath, spec.project));
   }
   const overlaps = overlappingChangedFiles(reports);
   return {
@@ -1949,6 +1949,17 @@ async function collectSummary(config, notionUrl, spec, taskFilter = undefined, o
     overlaps,
     recommendation: collectRecommendation(reports, overlaps)
   };
+}
+
+async function projectSubdirForSpec(spec) {
+  const existing = normalizeProjectSubdir(spec.repoContext?.projectRelativePath || spec._program?.projectRelativePath);
+  if (existing) return existing;
+  try {
+    const gitRoot = await resolveGitRoot(spec.project);
+    return normalizeProjectSubdir(path.relative(gitRoot, spec.project));
+  } catch {
+    return "";
+  }
 }
 
 function collectedOverlayTaskIds(spec) {
@@ -2051,18 +2062,41 @@ async function canonicalPath(filePath) {
   }
 }
 
-async function inspectCollectTask(task, projectRelativePath = "") {
+async function inspectCollectTask(task, projectRelativePath = "", mainProjectDir = "") {
   const worktree = task.lastResult.worktree;
   if (!(await pathExists(worktree))) {
     throw new Error(`Worktree for ${task.id} does not exist: ${worktree}`);
   }
-  const changedFiles = await worktreeChangedFiles(worktree, task.lastResult.baseHead, projectRelativePath);
+  const changedFiles = await collectChangedFilesForTask(task, worktree, projectRelativePath, mainProjectDir);
   for (const file of changedFiles) {
     if (isUnsafeRelativePath(file)) {
       throw new Error(`Refusing to collect unsafe path from ${task.id}: ${file}`);
     }
   }
   return { task, worktree, changedFiles };
+}
+
+async function collectChangedFilesForTask(task, worktree, projectRelativePath = "", mainProjectDir = "") {
+  const detected = await worktreeChangedFiles(worktree, task.lastResult.baseHead, projectRelativePath, mainProjectDir);
+  const reported = workerReportedChangedFiles(task);
+  if (!reported.length) return detected;
+
+  const projectSubdir = normalizeProjectSubdir(projectRelativePath);
+  const worktreeProjectDir = projectSubdir ? path.join(worktree, projectSubdir) : worktree;
+  if (!mainProjectDir || !(await pathExists(mainProjectDir))) return [...new Set([...detected, ...reported])];
+
+  const verified = [];
+  for (const file of reported) {
+    if (isUnsafeRelativePath(file)) continue;
+    if (await filesDiffer(path.join(worktreeProjectDir, file), path.join(mainProjectDir, file))) verified.push(file);
+  }
+  return [...new Set([...detected, ...verified])];
+}
+
+function workerReportedChangedFiles(task) {
+  const files = task.lastResult?.changed_files || task.lastResult?.changedFiles || [];
+  if (!Array.isArray(files)) return [];
+  return files.map(normalizeExpectedFile).filter(Boolean);
 }
 
 async function applyCollectReport({ report, projectRoot, worktreeProjectDir }) {
@@ -2145,10 +2179,9 @@ async function syncDirectorySnapshot(sourceDir, targetDir) {
   return touched;
 }
 
-async function worktreeChangedFiles(worktree, baseHead = undefined, projectSubdir = "") {
+async function worktreeChangedFiles(worktree, baseHead = undefined, projectSubdir = "", mainProjectDir = "") {
   projectSubdir = normalizeProjectSubdir(projectSubdir);
   const worktreeProjectDir = projectSubdir ? path.join(worktree, projectSubdir) : worktree;
-  const mainProjectDir = await findMainProjectDir(worktree, projectSubdir);
   if (!(await pathExists(worktreeProjectDir))) return [];
 
   if (baseHead) {
@@ -2185,12 +2218,6 @@ function normalizeProjectSubdir(value) {
   return normalized === "." ? "" : normalized;
 }
 
-async function findMainProjectDir(worktree, projectSubdir) {
-  if (!projectSubdir) return undefined;
-  const gitRoot = await resolveGitRoot(worktree);
-  return path.join(gitRoot, projectSubdir);
-}
-
 async function diffDirectoryFiles(sourceDir, targetDir) {
   const { readFile } = await import("node:fs/promises");
   const sourceFiles = await listDirectoryFiles(sourceDir);
@@ -2212,6 +2239,17 @@ async function diffDirectoryFiles(sourceDir, targetDir) {
     }
   }
   return result;
+}
+
+async function filesDiffer(sourcePath, targetPath) {
+  const { readFile } = await import("node:fs/promises");
+  if (!(await pathExists(sourcePath))) return false;
+  if (!(await pathExists(targetPath))) return true;
+  const [sourceContent, targetContent] = await Promise.all([
+    readFile(sourcePath),
+    readFile(targetPath)
+  ]);
+  return !sourceContent.equals(targetContent);
 }
 
 async function listDirectoryFiles(dir) {

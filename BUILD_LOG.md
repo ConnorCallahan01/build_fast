@@ -598,3 +598,12 @@ Added Notion-side bug tracking:
 - Bug rows relate back to the matching Spec page and repair Task page when those Notion page ids are known.
 - `qa --type browser` now syncs bug rows even when `--create-task` is not used.
 - `bugs --ntn` prints the synced Notion bug URL when available.
+
+### Step 43: Collect Ignored Project Repair Files
+
+The live Bugs loop test exposed a collection gap:
+
+- Orbit Notes is an ignored fixture under `test_projects/`, so git status inside the repair worktree showed `!! test_projects/orbit_notes/` rather than tracked file changes.
+- The worker correctly fixed `demo/index.html` and reported `changed_files: ["demo/index.html"]`, but `collect` trusted git detection and applied zero files.
+- Collection now verifies worker-reported changed files against the real main checkout project path and includes them when the files differ.
+- Manual `collect --apply` now derives the project subdirectory from the spec project path when repo context metadata is absent.
