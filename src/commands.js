@@ -2581,7 +2581,7 @@ async function runBrowserQa(projectDir, flags = {}) {
     checks.push({ name: "index.html", ok: htmlResponse.ok && /<!doctype html/i.test(html), detail: `${htmlResponse.status} ${htmlResponse.headers.get("content-type") || ""}` });
     checks.push({ name: "create note form", ok: hasAll(html, ["note-title", "note-body", "note-tags", "create-form"]), detail: "expected title/body/tags/create form anchors" });
     checks.push({ name: "search and tag UI", ok: hasAll(html, ["search-input", "tag-filter", "notes-list"]), detail: "expected search/tag/list anchors" });
-    checks.push({ name: "module script", ok: hasModuleScript(html, "./app.js"), detail: "expected demo/app.js module script" });
+    checks.push({ name: "module script", ok: hasModuleScript(html, "./app.js") || hasModuleScript(html, "/demo/app.js"), detail: "expected demo/app.js module script" });
 
     const moduleResponse = await fetch(new URL("/src/orbit-notes.js", url));
     checks.push({
