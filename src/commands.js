@@ -318,6 +318,16 @@ export async function askChoice(rl, label, fallback, choices) {
   }
 }
 
+export async function askTypedChoice(rl, label, fallback, choices) {
+  const values = choices.map((choice) => typeof choice === "string" ? choice : choice.value);
+  const defaultValue = values.includes(fallback) ? fallback : values[0];
+  while (true) {
+    const answer = (await askDefault(rl, `${label} (${values.join("/")})`, defaultValue)).trim();
+    if (values.includes(answer)) return answer;
+    console.log(`Choose one of: ${values.join(", ")}`);
+  }
+}
+
 async function askYesNo(rl, label, fallback = false) {
   if (process.stdin.isTTY && process.stdout.isTTY) {
     const value = await askChoice(rl, label, fallback ? "yes" : "no", [
@@ -629,7 +639,12 @@ async function plan(flags) {
     } finally {
       rl.close();
     }
-    type = await askChoice(null, "Work type", type, ["feature", "bug", "chore", "refactor", "project", "init", "overhaul"]);
+    const typeRl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      type = await askTypedChoice(typeRl, "Work type", type, ["feature", "bug", "chore", "refactor", "project", "init", "overhaul"]);
+    } finally {
+      typeRl.close();
+    }
     if (isMultiSpecType(type)) return planProgram({ config, notionUrl, type, project, flags: { ...flags, goal } });
   }
   if (!goal) throw new Error("Missing required flag: --goal");

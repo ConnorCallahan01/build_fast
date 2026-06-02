@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { askChoice, askLongText } from "../src/commands.js";
+import { askChoice, askLongText, askTypedChoice } from "../src/commands.js";
 
 const questions = [];
 const answers = [
@@ -43,5 +43,11 @@ assert.equal(fallback, "Existing goal");
 
 const chosen = await askChoice(null, "Work type", "project", ["feature", "project"]);
 assert.equal(chosen, "project");
+
+const typedDefault = await askTypedChoice({ question: async () => "" }, "Work type", "project", ["feature", "project"]);
+assert.equal(typedDefault, "project");
+
+const typedValue = await askTypedChoice({ question: async () => "feature" }, "Work type", "project", ["feature", "project"]);
+assert.equal(typedValue, "feature");
 
 console.log("long text tests passed");
