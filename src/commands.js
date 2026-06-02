@@ -273,6 +273,31 @@ async function askDefault(rl, label, fallback = "") {
   return value || fallback;
 }
 
+export async function askLongText(rl, label, fallback = "") {
+  term.section(label);
+  if (fallback) {
+    term.keyValue("current", fallback);
+    term.line("Press Enter to keep the current value, or paste new text below.");
+  } else {
+    term.line("Paste or type as much text as you need.");
+  }
+  term.line("Finish with /done on its own line. Use /cancel to abort.");
+
+  const first = await rl.question("> ");
+  if (!first.trim() && fallback) return fallback;
+  if (first.trim() === "/cancel") return "";
+  if (first.trim() === "/done") return "";
+
+  const lines = [first];
+  while (true) {
+    const line = await rl.question("");
+    const trimmed = line.trim();
+    if (trimmed === "/done") return lines.join("\n").trim();
+    if (trimmed === "/cancel") return "";
+    lines.push(line);
+  }
+}
+
 async function askChoice(rl, label, fallback, choices) {
   if (process.stdin.isTTY && process.stdout.isTTY) {
     rl.pause();
@@ -598,7 +623,7 @@ async function plan(flags) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
       term.heading("build_fast plan", path.basename(project));
-      goal = await askDefault(rl, "What do you want to build?", "");
+      goal = await askLongText(rl, "What do you want to build?", existing?.goal || "");
       type = await askChoice(rl, "Work type", type, ["feature", "bug", "chore", "refactor", "project", "init", "overhaul"]);
     } finally {
       rl.close();
@@ -651,7 +676,7 @@ async function planProgram({ config, notionUrl, type, project, flags }) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
       term.heading("build_fast program", path.basename(project));
-      goal = await askDefault(rl, "What larger goal should be planned?", "");
+      goal = await askLongText(rl, "What larger goal should be planned?", existing?.goal || "");
     } finally {
       rl.close();
     }

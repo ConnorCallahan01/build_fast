@@ -704,3 +704,13 @@ Second follow-up:
 - Added a short TTY-only launch animation for interactive init.
 - Animation automatically falls back to static output in non-TTY/CI contexts and can be disabled with `BUILD_FAST_ANIMATION=0`.
 - Extended the orange accent to app-owned headings, sections, step lines, info labels, key/value labels, and plan/program result lines while keeping semantic OK/WARN/ERR colors.
+
+### Step 51: Paste-Friendly Goal Input
+
+Improved interactive planning for long product specs:
+
+- `build_fast plan` and program planning now use a multi-line goal prompt when no `--goal` flag is provided.
+- Users can paste large text blocks and finish with `/done` on its own line.
+- `/cancel` aborts the current long-text prompt.
+- Existing one-line config prompts still use normal readline behavior.
+- Added regression coverage for pasted multi-line goal input and fallback behavior.

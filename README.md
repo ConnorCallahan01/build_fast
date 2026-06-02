@@ -83,6 +83,8 @@ Create a plan:
 build_fast plan
 ```
 
+For long goals, paste the full text into the interactive plan prompt and finish with `/done` on its own line.
+
 Run the full agent loop:
 
 ```bash

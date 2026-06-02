@@ -42,6 +42,7 @@ node bin/build_fast.js plan \
 ```
 
 After `init`, you can also run `plan` with no flags and answer the prompts.
+The interactive goal prompt accepts pasted multi-line text. Finish the paste with `/done` on its own line, or use `/cancel` to abort that prompt.
 
 Useful flags:
 
