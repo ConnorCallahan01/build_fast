@@ -640,8 +640,8 @@ async function plan(flags) {
 
   await writeToNotion(config, notionUrl, formatSpecMarkdown(spec), { label: "spec" });
 
-  console.log(`Planned ${spec.tasks.length} tasks for: ${spec.title}`);
-  console.log(`Local spec: .build_fast/specs/${spec.id}/spec.json`);
+  term.line(`Planned ${spec.tasks.length} tasks for: ${spec.title}`);
+  term.line(`Local spec: .build_fast/specs/${spec.id}/spec.json`);
 }
 
 async function planProgram({ config, notionUrl, type, project, flags }) {
@@ -680,12 +680,12 @@ async function planProgram({ config, notionUrl, type, project, flags }) {
   const program = makeProgram({ goal, type, project, notionUrl, plan: generated });
   await saveProgram(config, notionUrl, program);
 
-  console.log(`Planned ${program.specs.length} specs for: ${program.title}`);
+  term.line(`Planned ${program.specs.length} specs for: ${program.title}`);
   for (const spec of program.specs) {
     const depLabel = spec.dependencies.length ? ` (depends: ${spec.dependencies.join(", ")})` : "";
-    console.log(`  ${spec.id}: ${spec.title} — ${spec.tasks.length} tasks${depLabel}`);
+    term.line(`  ${spec.id}: ${spec.title} — ${spec.tasks.length} tasks${depLabel}`);
   }
-  console.log(`Local program: .build_fast/specs/${program.id}/program/program.json`);
+  term.line(`Local program: .build_fast/specs/${program.id}/program/program.json`);
 }
 
 function normalizeProgramPlan(parsed, goal, repoContext = undefined) {

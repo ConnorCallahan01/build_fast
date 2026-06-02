@@ -73,20 +73,20 @@ function wait(ms) {
 
 export function heading(label, detail = "") {
   const text = detail ? `${label} ${color(codes.dim, detail)}` : label;
-  console.log(`\n${color(codes.bold + codes.white, text)}`);
+  console.log(`\n${color(codes.orange + codes.bold, text)}`);
 }
 
 export function section(label) {
-  console.log(`\n${color(codes.bold, label)}`);
+  console.log(`\n${color(codes.orange + codes.bold, label)}`);
   console.log(color(codes.orange, "-".repeat(Math.min(64, Math.max(24, String(label).length + 12)))));
 }
 
 export function step(label) {
-  console.log(color(codes.magenta, `> ${label}`));
+  console.log(color(codes.orange, `> ${label}`));
 }
 
 export function info(label, detail = "") {
-  console.log(detail ? `${color(codes.cyan, "INFO")} ${label}: ${detail}` : `${color(codes.cyan, "INFO")} ${label}`);
+  console.log(detail ? `${color(codes.orange, "INFO")} ${label}: ${detail}` : `${color(codes.orange, "INFO")} ${label}`);
 }
 
 export function success(label, detail = "") {
@@ -107,7 +107,11 @@ export function check(ok, label, detail = "") {
 }
 
 export function keyValue(label, value = "") {
-  console.log(`${color(codes.dim, `${label}:`)} ${value}`);
+  console.log(`${color(codes.orange, `${label}:`)} ${value}`);
+}
+
+export function line(value = "") {
+  console.log(color(codes.orange, value));
 }
 
 export function muted(value) {

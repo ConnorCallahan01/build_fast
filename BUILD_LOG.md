@@ -703,3 +703,4 @@ Second follow-up:
 - Switched the banner, dividers, and selected rows to an orange terminal accent.
 - Added a short TTY-only launch animation for interactive init.
 - Animation automatically falls back to static output in non-TTY/CI contexts and can be disabled with `BUILD_FAST_ANIMATION=0`.
+- Extended the orange accent to app-owned headings, sections, step lines, info labels, key/value labels, and plan/program result lines while keeping semantic OK/WARN/ERR colors.

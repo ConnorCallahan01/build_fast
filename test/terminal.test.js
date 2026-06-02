@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { animatedBanner, banner, keyValue, section, select, wrapBlock } from "../src/terminal.js";
+import { animatedBanner, banner, keyValue, line, section, select, wrapBlock } from "../src/terminal.js";
 
 const wrapped = wrapBlock("This is a long worker summary that should wrap into several readable terminal lines.", {
   width: 38,
@@ -29,6 +29,7 @@ try {
   await animatedBanner("build_fast", "Project setup", { output: { isTTY: false } });
   section("Workspace");
   keyValue("project", "/tmp/app");
+  line("Planned 3 tasks for: Example");
 } finally {
   console.log = originalLog;
 }
@@ -38,5 +39,6 @@ assert.match(output, /plan \/ swarm \/ verify \/ ship/);
 assert.equal((output.match(/plan \/ swarm \/ verify \/ ship/g) || []).length, 2);
 assert.match(output, /Workspace/);
 assert.match(output, /project:/);
+assert.match(output, /Planned 3 tasks/);
 
 console.log("terminal tests passed");
