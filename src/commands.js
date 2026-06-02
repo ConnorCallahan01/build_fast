@@ -648,7 +648,7 @@ async function drive(flags) {
     throw new Error("Drive feedback checks failed.");
   }
 
-  if (await runDriveQaFinalPass({ config, notionUrl, target: refreshed, flags })) return;
+  if (await runDriveQaFinalPass({ config, notionUrl, target: refreshed, flags, autopilot, permissionProfile, concurrency, maxTasks })) return;
 
   await sync({ ntn: notionUrl });
   console.log("Drive complete.");
@@ -668,7 +668,8 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
     program = await loadProgram(config, notionUrl);
   }
 
-  await syncProgram({ config, notionUrl, program });
+  const completedAtStart = programComplete(program);
+  if (!completedAtStart) await syncProgram({ config, notionUrl, program });
   if (flags["no-agent"]) {
     console.log("Drive no-agent smoke complete after plan/sync.");
     return;
@@ -803,15 +804,19 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
     throw new Error(`Drive stopped after ${maxIterations} spec iterations with pending specs remaining.`);
   }
 
-  if ((program.specs || []).every((spec) => spec.status === "completed")) {
+  if (!completedAtStart && programComplete(program)) {
     program = { ...program, status: "completed", updatedAt: nowIso() };
     await saveProgram(config, notionUrl, program);
     await syncProgram({ config, notionUrl, program });
   }
 
-  if (await runDriveQaFinalPass({ config, notionUrl, target: programToStandaloneSpec(program, program.specs.at(-1)), flags })) return;
+  if (await runDriveQaFinalPass({ config, notionUrl, target: programToStandaloneSpec(program, program.specs.at(-1)), flags, autopilot, permissionProfile, concurrency, maxTasks })) return;
 
   console.log("Drive complete. All specs shipped.");
+}
+
+function programComplete(program) {
+  return program?.status === "completed" && (program.specs || []).every((spec) => spec.status === "completed");
 }
 
 function shouldDriveApply(autopilot, collection) {
@@ -919,35 +924,128 @@ function addFeedbackRepairTask(spec, checks, flags = {}) {
   };
 }
 
-async function runDriveQaFinalPass({ config, notionUrl, target, flags }) {
+async function runDriveQaFinalPass({ config, notionUrl, target, flags, autopilot, permissionProfile, concurrency, maxTasks }) {
   const qaType = flags.qa === true ? "browser" : optionalString(flags, "qa", "");
   if (!qaType) return false;
   if (qaType !== "browser") throw new Error(`Unsupported drive QA type: ${qaType}. Current MVP supports --qa browser.`);
 
-  console.log("Running final browser QA...");
-  const result = await runBrowserQa(target, flags);
-  for (const check of result.checks) {
-    console.log(`${check.ok ? "OK " : "ERR"} ${check.name}: ${check.detail}`);
-  }
+  const maxQaRepairs = Math.max(0, Number(optionalString(flags, "max-qa-repairs", "1")));
+  let attempt = 0;
+  let currentTarget = target;
 
-  const failed = result.checks.filter((check) => !check.ok);
-  if (!failed.length) {
-    console.log(`Final browser QA passed: ${result.url}`);
-    return false;
-  }
+  while (attempt <= maxQaRepairs) {
+    console.log(attempt === 0 ? "Running final browser QA..." : `Rerunning final browser QA after repair attempt ${attempt}...`);
+    const result = await runBrowserQa(currentTarget, flags);
+    printQaChecks(result.checks);
 
-  await logBrowserQaBugs(config, notionUrl, target, failed);
-  const updated = await addOpenBugTasks(config, notionUrl, target);
-  if (updated) {
+    const failed = result.checks.filter((check) => !check.ok);
+    if (!failed.length) {
+      if (attempt > 0) await completeProgramSpecFromStandalone(config, notionUrl, currentTarget);
+      console.log(`Final browser QA passed: ${result.url}`);
+      return false;
+    }
+
+    const artifactPath = await writeBrowserQaArtifact(config, notionUrl, result, failed);
+    await logBrowserQaBugs(config, notionUrl, currentTarget, failed, artifactPath);
+    const updated = await addOpenBugTasks(config, notionUrl, currentTarget);
+    if (!updated) {
+      await sync({ ntn: notionUrl });
+      throw new Error(`Final browser QA failed with ${failed.length} issue${failed.length === 1 ? "" : "s"} and no new bug tasks could be created.`);
+    }
+
     await saveSpec(config, notionUrl, updated);
     await persistProgramSpecFromStandalone(config, notionUrl, updated);
     await sync({ ntn: notionUrl });
-    console.log(`Created ${updated.tasks.at(-1).id} from final browser QA failures. Rerun drive to fix QA bugs.`);
-    return true;
+
+    if (!driveShouldAutoRepairQa(autopilot) || attempt >= maxQaRepairs) {
+      console.log(`Created ${updated.tasks.at(-1).id} from final browser QA failures. Rerun drive to fix QA bugs.`);
+      if (artifactPath) console.log(`QA artifact: ${artifactPath}`);
+      return true;
+    }
+
+    console.log(`Created ${updated.tasks.at(-1).id} from final browser QA failures. Running QA bug repair workers.`);
+    const repaired = await runQaRepairCycle({ config, notionUrl, flags, autopilot, permissionProfile, concurrency, maxTasks });
+    if (!repaired.continueQa) return true;
+    currentTarget = repaired.target || await loadSpec(config, notionUrl);
+    attempt += 1;
   }
 
-  await sync({ ntn: notionUrl });
-  throw new Error(`Final browser QA failed with ${failed.length} issue${failed.length === 1 ? "" : "s"}.`);
+  return true;
+}
+
+function printQaChecks(checks) {
+  for (const check of checks) console.log(`${check.ok ? "OK " : "ERR"} ${check.name}: ${check.detail}`);
+}
+
+function driveShouldAutoRepairQa(autopilot) {
+  return autopilot === "junior_mode" || autopilot === "boss_mode";
+}
+
+async function runQaRepairCycle({ config, notionUrl, flags, autopilot, permissionProfile, concurrency, maxTasks }) {
+  await swarm({
+    ntn: notionUrl,
+    autopilot,
+    "permission-profile": permissionProfile,
+    concurrency,
+    "max-tasks": maxTasks,
+    parallel: optionalString(flags, "parallel", "default")
+  });
+
+  let spec = await loadSpec(config, notionUrl);
+  if (readyPendingTasks(spec).some((task) => task.kind === "bug_fix")) {
+    console.log("QA bug repair workers did not finish every bug task. Rerun drive to continue.");
+    return { continueQa: false, target: spec };
+  }
+
+  const collection = await collectSummary(config, notionUrl, spec, undefined, { uncollectedOnly: true, skipMissing: true });
+  if (collection.reports.length) {
+    printCollectReports(collection.reports, false);
+    const shouldApply = shouldDriveApply(autopilot, collection);
+    if (shouldApply.apply) {
+      console.log(`Drive applying QA repair ${shouldApply.taskId}: ${shouldApply.reason}`);
+      await collect({ ntn: notionUrl, task: shouldApply.taskId, apply: true });
+    } else {
+      console.log(`Drive stopped before QA repair collection apply: ${shouldApply.reason}`);
+      return { continueQa: false, target: spec };
+    }
+  }
+
+  spec = await loadSpec(config, notionUrl);
+  const checks = await runFeedbackLoops(spec);
+  for (const check of checks) {
+    console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
+  }
+  if (checks.some((check) => !check.ok)) {
+    const repaired = await addFeedbackBugAndRepair(config, notionUrl, spec, checks, flags);
+    if (repaired) {
+      await saveSpec(config, notionUrl, repaired);
+      await persistProgramSpecFromStandalone(config, notionUrl, repaired);
+      await sync({ ntn: notionUrl });
+      console.log(`Created ${repaired.tasks.at(-1).id} to repair feedback after QA bug fixes. Rerun drive to continue.`);
+      return { continueQa: false, target: repaired };
+    }
+    throw new Error("QA repair feedback checks failed.");
+  }
+
+  await persistProgramSpecFromStandalone(config, notionUrl, spec);
+  return { continueQa: true, target: spec };
+}
+
+async function writeBrowserQaArtifact(config, notionUrl, result, failed) {
+  const safeTimestamp = nowIso().replace(/[:.]/g, "-");
+  const dir = path.join(specDir(config, notionUrl), "qa-artifacts");
+  await mkdir(dir, { recursive: true });
+  const artifactPath = path.join(dir, `browser-${safeTimestamp}.json`);
+  await writeJson(artifactPath, {
+    type: "browser",
+    createdAt: nowIso(),
+    url: result.url,
+    failed,
+    checks: result.checks,
+    profile: result.profile,
+    html: result.html || ""
+  });
+  return artifactPath;
 }
 
 async function persistProgramSpecFromStandalone(config, notionUrl, spec) {
@@ -961,6 +1059,23 @@ async function persistProgramSpecFromStandalone(config, notionUrl, spec) {
     browserQa: spec.browserQa
   });
   await saveProgram(config, notionUrl, { ...updatedProgram, status: "planned", updatedAt: nowIso() });
+}
+
+async function completeProgramSpecFromStandalone(config, notionUrl, spec) {
+  if (!spec?._program?.specId) return false;
+  const program = await loadProgram(config, notionUrl);
+  if (!program) return false;
+  let updatedProgram = updateProgramSpec(program, spec._program.specId, {
+    status: "completed",
+    tasks: spec.tasks,
+    notion: spec.notion,
+    browserQa: spec.browserQa,
+    updatedAt: nowIso()
+  });
+  if (programComplete(updatedProgram)) updatedProgram = { ...updatedProgram, status: "completed", updatedAt: nowIso() };
+  await saveProgram(config, notionUrl, updatedProgram);
+  await syncProgram({ config, notionUrl, program: updatedProgram });
+  return true;
 }
 
 async function addFeedbackBugAndRepair(config, notionUrl, spec, checks, flags = {}) {
@@ -2588,7 +2703,8 @@ async function qa(flags) {
 
   const failed = result.checks.filter((check) => !check.ok);
   if (failed.length) {
-    await logBrowserQaBugs(config, notionUrl, target, failed);
+    const artifactPath = await writeBrowserQaArtifact(config, notionUrl, result, failed);
+    await logBrowserQaBugs(config, notionUrl, target, failed, artifactPath);
     if (flags["create-task"] || flags["create-tasks"]) {
       const updated = await addOpenBugTasks(config, notionUrl, target);
       if (updated) {
@@ -2596,19 +2712,21 @@ async function qa(flags) {
         await sync({ ntn: notionUrl });
       }
     }
+    console.log(`QA artifact: ${artifactPath}`);
     throw new Error(`Browser QA failed with ${failed.length} issue${failed.length === 1 ? "" : "s"}.`);
   }
 
   console.log(`Browser QA passed: ${result.url}`);
 }
 
-async function logBrowserQaBugs(config, notionUrl, target, failed) {
+async function logBrowserQaBugs(config, notionUrl, target, failed, artifactPath = "") {
   for (const check of failed) {
     await appendBug(config, notionUrl, {
       source: "browser_qa",
       title: `Browser QA failed: ${check.name}`,
       details: check.detail,
       command: check.command || "node bin/build_fast.js qa --type browser",
+      artifactPath,
       specId: target.id,
       status: "open"
     });
@@ -2624,6 +2742,8 @@ async function runBrowserQa(target, flags = {}) {
   if (!startCommand) {
     return {
       url: null,
+      profile,
+      html: "",
       checks: [{ name: "browser QA start command", ok: false, detail: "no browserQa.startCommand and package.json has no scripts.demo" }]
     };
   }
@@ -2636,16 +2756,17 @@ async function runBrowserQa(target, flags = {}) {
     stdio: ["ignore", "pipe", "pipe"]
   });
   let output = "";
+  let html = "";
   child.stdout.on("data", (chunk) => { output += chunk.toString(); });
   child.stderr.on("data", (chunk) => { output += chunk.toString(); });
 
   try {
     const ready = await waitForHttp(url, 8000);
     checks.push({ name: "demo server", ok: ready.ok, detail: ready.detail, command: startCommand });
-    if (!ready.ok) return { url, checks };
+    if (!ready.ok) return { url, profile, html, checks };
 
     const htmlResponse = await fetch(url);
-    const html = await htmlResponse.text();
+    html = await htmlResponse.text();
     checks.push({ name: "index.html", ok: htmlResponse.ok && /<!doctype html/i.test(html), detail: `${htmlResponse.status} ${htmlResponse.headers.get("content-type") || ""}` });
     checks.push(...await browserQaHtmlChecks(html, url, profile));
   } catch (error) {
@@ -2658,7 +2779,7 @@ async function runBrowserQa(target, flags = {}) {
     checks.push({ name: "server output", ok: true, detail: firstOutputLine(output) });
   }
 
-  return { url, checks };
+  return { url, profile, html, checks };
 }
 
 export function browserQaProfile(target = {}, flags = {}) {
@@ -2930,6 +3051,7 @@ async function addOpenBugTasks(config, notionUrl, spec) {
         "Fix the logged bug below with a fresh focused pass.",
         `Source: ${bug.source || "unknown"}`,
         bug.command ? `Command/check: ${bug.command}` : null,
+        bug.artifactPath ? `Artifact: ${bug.artifactPath}` : null,
         bug.details ? `Details: ${bug.details}` : null,
         "Make the smallest coherent fix and rerun the relevant checks."
       ].filter(Boolean).join("\n"),

@@ -83,6 +83,7 @@ Useful drive flags:
 | --- | --- |
 | `--max-iterations` | Maximum swarm/spec iterations before stopping |
 | `--max-repairs` | Maximum feedback repair tasks per spec, default `2` |
+| `--max-qa-repairs` | Maximum final browser QA repair cycles, default `1`; use `0` to only create bug tasks |
 | `--worker claude` | Select the current worker adapter |
 | `--parallel smart` | Group ready tasks conservatively using expected files, parallel groups, risk, and task type |
 | `--qa browser` | Run browser QA as the final drive pass; failures become bug-fix tasks |
@@ -171,7 +172,7 @@ Run browser QA automatically after `drive` completes feedback checks:
 node bin/build_fast.js drive --ntn "$NTN" --qa browser
 ```
 
-When final QA fails, `drive` logs bugs, creates `[bug]` Spec Tasks, syncs Notion, and stops. Rerun `drive` to let fresh workers repair those QA bugs.
+When final QA fails, `drive` logs bugs, writes a JSON artifact, creates `[bug]` Spec Tasks, and syncs Notion. In `junior_mode` and `boss_mode`, it runs one automatic QA repair cycle by default, then reruns browser QA. In `intern_mode`, or with `--max-qa-repairs 0`, it stops after creating the bug tasks.
 
 The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types.
 
@@ -209,7 +210,7 @@ Convert open bugs into pending Spec Tasks and sync them to Notion:
 node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
 ```
 
-The bug ledger is stored at `.build_fast/specs/<target>/bugs.json`. Today those bugs become normal Spec Tasks in Notion. A dedicated Notion Bugs database is planned.
+The bug ledger is stored at `.build_fast/specs/<target>/bugs.json`. Browser QA failure artifacts are stored at `.build_fast/specs/<target>/qa-artifacts/` and are referenced in generated bug-task prompts. Today those bugs become normal Spec Tasks in Notion. A dedicated Notion Bugs database is planned.
 
 ## Workers
 

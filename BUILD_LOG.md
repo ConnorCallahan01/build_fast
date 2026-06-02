@@ -556,3 +556,15 @@ Added `drive --qa browser` as an optional final QA pass:
 - QA failures are logged to the bug ledger and converted into `[bug]` Spec Tasks.
 - Program-mode QA bug tasks are written back into the active program spec so rerunning `drive` can launch fresh fix workers.
 - `--qa` without a value is treated as `--qa browser`.
+
+### Step 39: Final QA Repair Loop And Artifacts
+
+Tightened the end-of-drive QA loop:
+
+- Completed programs no longer do redundant Notion syncs before final QA.
+- Browser QA failures now write JSON artifacts under `.build_fast/specs/<target>/qa-artifacts/` with failed checks, all checks, QA profile, served URL, and captured HTML.
+- Logged browser QA bugs include the artifact path.
+- Generated `[bug]` Spec Tasks include the artifact path in their worker instructions.
+- In `junior_mode` and `boss_mode`, `drive --qa browser` creates bug tasks, runs one automatic fresh-worker repair cycle by default, applies safe repair output, reruns feedback checks, and reruns browser QA.
+- `--max-qa-repairs <n>` controls the bounded repair loop; `0` keeps the older create-task-and-stop behavior.
+- Standalone `qa --type browser` also writes artifacts when failures occur.

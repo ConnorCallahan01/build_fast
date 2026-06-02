@@ -24,7 +24,7 @@ Modern coding agents are powerful, but they still need good direction, clean tas
 
 ## Current Status
 
-This is an MVP. It works locally, supports live Notion sync through the current Notion Data Sources API, can run Claude Code workers non-interactively, can create repair tasks from failed feedback checks, and includes a browser QA/bug-ledger path for final-pass fixes. It is not yet a packaged npm binary, and deeper GitHub/CI automation is still on the roadmap.
+This is an MVP. It works locally, supports live Notion sync through the current Notion Data Sources API, can run Claude Code workers non-interactively, can create repair tasks from failed feedback checks, and includes a browser QA/bug-ledger path for final-pass fixes. In `junior_mode` and `boss_mode`, final browser QA can now create bug tasks and run a bounded repair pass automatically. It is not yet a packaged npm binary, and deeper GitHub/CI automation is still on the roadmap.
 
 ## Requirements
 
@@ -147,7 +147,7 @@ Run browser QA automatically at the end of `drive`:
 node bin/build_fast.js drive --ntn "$NTN" --qa browser
 ```
 
-If final QA fails, `drive` logs bugs, creates `[bug]` Spec Tasks, syncs them to Notion, and stops so the next `drive` run can launch fresh fix workers.
+If final QA fails, `drive` logs bugs, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode` and `boss_mode`, `drive` automatically runs one QA repair pass by default, applies the fix output when safe, reruns QA, and then stops only if failures remain. Use `--max-qa-repairs 0` to only create bug tasks, or increase the limit for more retry cycles.
 
 Specs can define a browser QA profile so the checks are project-specific instead of Orbit-specific:
 

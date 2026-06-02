@@ -26,15 +26,16 @@
 - Improve feedback-loop command validation.
 - Make failed feedback checks easier to inspect and rerun. MVP repair-task loop added.
 - Log feedback and QA bugs into a ledger and convert them into final-pass fix tasks. MVP added.
+- Run final-pass bug workers automatically at the end of `drive`. MVP added for browser QA in `junior_mode`/`boss_mode`.
 - Add clearer recovery commands after partial drive runs.
 - Add a `--dry-run` preview for drive orchestration.
-- Run final-pass bug workers automatically at the end of `drive`.
 
 ### Browser QA
 
 - Add structured browser QA for static demo apps. MVP added.
 - Add project/spec-specific browser QA profiles. MVP added.
-- Capture screenshots and DOM snapshots for failed UI checks.
+- Capture failure artifacts for failed UI checks. MVP JSON artifacts added.
+- Capture screenshots and richer DOM snapshots for failed UI checks.
 - Add Playwright-backed interaction checks when dependencies are available.
 
 ### Better Collection
