@@ -107,6 +107,7 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 | `cleanup` | Remove recorded worktrees and branches |
 | `review` | Run a Claude-backed review prompt |
 | `qa` | Run structured QA checks, currently browser demo checks |
+| `qa-setup` | Check or install Playwright browser QA dependencies in a target project |
 | `bugs` | Inspect logged QA/feedback bugs or convert them into fix tasks |
 | `stop` | Mark active workers stopped in local state |
 | `ship` | Preview or apply guarded branch/commit/push/PR handoff |
@@ -140,6 +141,18 @@ node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
 ```
 
 Browser QA fetches the served HTML, verifies expected UI anchors, resolves linked stylesheets/scripts the same way a browser does, and checks those assets return `200` with CSS/JavaScript MIME types. This catches broken paths like a page served at `/` linking to `./styles.css` when the stylesheet actually lives under `/demo/styles.css`. If `playwright` is installed in the project, QA also renders the page in Chromium, checks for console/page errors, verifies rendered selectors/text, and can run configured interaction steps. Use `--require-playwright` when rendered QA must be enforced instead of skipped.
+
+Check Playwright readiness for rendered QA:
+
+```bash
+node bin/build_fast.js qa-setup --ntn "$NTN"
+```
+
+Install missing Playwright pieces into the target project:
+
+```bash
+node bin/build_fast.js qa-setup --ntn "$NTN" --install
+```
 
 Run browser QA automatically at the end of `drive`:
 

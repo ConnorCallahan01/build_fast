@@ -579,3 +579,12 @@ Added an optional rendered browser QA layer:
 - Browser QA profiles now preserve `render` and `interactions`.
 - Supported interaction actions are `fill`, `click`, `expectText`, and `expectSelector`.
 - Failed rendered checks can include a base64 PNG screenshot in the QA artifact.
+
+### Step 41: Playwright QA Setup Command
+
+Added `qa-setup` for rendered browser QA prerequisites:
+
+- `qa-setup --project <dir>` checks whether the target project has `playwright` installed and whether Chromium can launch.
+- `qa-setup --ntn <page>` resolves the active spec/program project from the Notion target.
+- `qa-setup --install` installs the Playwright package and Chromium browser files using the detected package manager.
+- Package manager detection supports npm, pnpm, yarn, and bun lockfiles, with `--package-manager` available as an override.

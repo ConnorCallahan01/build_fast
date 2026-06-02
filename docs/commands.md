@@ -166,6 +166,18 @@ Run browser QA against the active spec/program project:
 node bin/build_fast.js qa --ntn "$NTN" --type browser
 ```
 
+Check whether the active target project is ready for rendered Playwright QA:
+
+```bash
+node bin/build_fast.js qa-setup --ntn "$NTN"
+```
+
+Install missing Playwright package/browser files into the target project:
+
+```bash
+node bin/build_fast.js qa-setup --ntn "$NTN" --install
+```
+
 Run browser QA automatically after `drive` completes feedback checks:
 
 ```bash

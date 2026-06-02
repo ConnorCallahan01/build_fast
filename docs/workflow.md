@@ -263,6 +263,18 @@ To make browser QA part of the main drive loop:
 node bin/build_fast.js drive --ntn "$NTN" --qa browser
 ```
 
+For rendered Chromium checks, first verify Playwright setup:
+
+```bash
+node bin/build_fast.js qa-setup --ntn "$NTN"
+```
+
+Install missing Playwright pieces explicitly:
+
+```bash
+node bin/build_fast.js qa-setup --ntn "$NTN" --install
+```
+
 If final QA fails, `drive` logs the failures to the bug ledger, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode` and `boss_mode`, it automatically runs one fresh bug-worker repair cycle by default, applies the output when safe, and reruns browser QA. In `intern_mode`, or with `--max-qa-repairs 0`, it stops after creating the repair tasks.
 
 The QA command starts the demo, waits for the page, fetches the HTML, and checks for:

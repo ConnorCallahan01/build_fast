@@ -54,6 +54,8 @@ export async function dispatch(command, flags) {
       return review(flags);
     case "qa":
       return qa(flags);
+    case "qa-setup":
+      return qaSetup(flags);
     case "bugs":
       return bugs(flags);
     case "ship":
@@ -2719,6 +2721,109 @@ async function qa(flags) {
   }
 
   console.log(`Browser QA passed: ${result.url}`);
+}
+
+async function qaSetup(flags) {
+  const config = await loadConfig();
+  const project = await resolveQaProject(config, flags);
+  const packageManager = optionalString(flags, "package-manager", "") || await detectPackageManager(project);
+  const install = flags.install === true || flags.install === "true";
+
+  console.log("Browser QA setup");
+  console.log(`Project: ${project}`);
+  console.log(`Package manager: ${packageManager}`);
+
+  let status = await checkPlaywrightInstall(project);
+  printPlaywrightStatus(status);
+  if (status.packageOk && status.browserOk) return;
+
+  if (!install) {
+    console.log("Playwright setup is incomplete. Rerun with --install to install missing pieces.");
+    console.log(`Suggested: node bin/build_fast.js qa-setup --project "${project}" --install`);
+    return;
+  }
+
+  if (!status.packageOk) {
+    const command = playwrightPackageInstallCommand(packageManager);
+    console.log(`Installing Playwright package: ${command.join(" ")}`);
+    await execFileLogged(command[0], command.slice(1), { cwd: project, timeout: 120000 });
+  }
+
+  status = await checkPlaywrightInstall(project);
+  if (!status.browserOk) {
+    const command = playwrightBrowserInstallCommand(packageManager);
+    console.log(`Installing Playwright Chromium browser: ${command.join(" ")}`);
+    await execFileLogged(command[0], command.slice(1), { cwd: project, timeout: 180000 });
+  }
+
+  status = await checkPlaywrightInstall(project);
+  printPlaywrightStatus(status);
+  if (!status.packageOk || !status.browserOk) {
+    throw new Error("Playwright setup did not complete. Check the install output above.");
+  }
+}
+
+async function resolveQaProject(config, flags) {
+  if (flags.project && flags.project !== true) return normalizeProject(String(flags.project));
+  if (flags.ntn && flags.ntn !== true) {
+    const target = await loadActiveTarget(config, String(flags.ntn));
+    if (!target?.project) throw new Error("No local spec/program project found for --ntn. Pass --project explicitly.");
+    return target.project;
+  }
+  return process.cwd();
+}
+
+export async function detectPackageManager(project) {
+  if (await pathExists(path.join(project, "pnpm-lock.yaml"))) return "pnpm";
+  if (await pathExists(path.join(project, "yarn.lock"))) return "yarn";
+  if (await pathExists(path.join(project, "bun.lockb")) || await pathExists(path.join(project, "bun.lock"))) return "bun";
+  return "npm";
+}
+
+async function checkPlaywrightInstall(project) {
+  try {
+    const playwright = createRequire(path.join(project, "package.json"))("playwright");
+    try {
+      const browser = await playwright.chromium.launch({ headless: true });
+      await browser.close();
+      return { packageOk: true, browserOk: true, detail: "playwright package and Chromium browser are ready" };
+    } catch (error) {
+      return { packageOk: true, browserOk: false, detail: error.message || String(error) };
+    }
+  } catch (error) {
+    return { packageOk: false, browserOk: false, detail: error.message || String(error) };
+  }
+}
+
+function printPlaywrightStatus(status) {
+  console.log(`${status.packageOk ? "OK " : "ERR"} playwright package: ${status.packageOk ? "installed" : "missing"}`);
+  console.log(`${status.browserOk ? "OK " : "ERR"} playwright chromium: ${status.browserOk ? "launches" : status.detail}`);
+}
+
+export function playwrightPackageInstallCommand(packageManager) {
+  if (packageManager === "pnpm") return ["pnpm", "add", "-D", "playwright"];
+  if (packageManager === "yarn") return ["yarn", "add", "-D", "playwright"];
+  if (packageManager === "bun") return ["bun", "add", "-d", "playwright"];
+  return ["npm", "install", "-D", "playwright"];
+}
+
+export function playwrightBrowserInstallCommand(packageManager) {
+  if (packageManager === "pnpm") return ["pnpm", "exec", "playwright", "install", "chromium"];
+  if (packageManager === "yarn") return ["yarn", "playwright", "install", "chromium"];
+  if (packageManager === "bun") return ["bunx", "playwright", "install", "chromium"];
+  return ["npx", "playwright", "install", "chromium"];
+}
+
+async function execFileLogged(command, args, options) {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, args, options);
+    const output = `${stdout || ""}${stderr || ""}`.trim();
+    if (output) console.log(firstOutputLine(output));
+  } catch (error) {
+    const output = `${error.stdout || ""}${error.stderr || ""}`.trim();
+    if (output) console.log(firstOutputLine(output));
+    throw error;
+  }
 }
 
 async function logBrowserQaBugs(config, notionUrl, target, failed, artifactPath = "") {
