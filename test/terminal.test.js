@@ -51,6 +51,23 @@ assert.equal(await selectPromise, "project");
 assert.match(fakeOutput, /Work type/);
 assert.equal(fakeInput.isRaw, false);
 
+const enterInput = new EventEmitter();
+enterInput.isTTY = true;
+enterInput.isRaw = false;
+enterInput.setRawMode = (value) => {
+  enterInput.isRaw = value;
+};
+enterInput.resume = () => {};
+const enterPromise = select("Work type", ["feature", "project"], "project", {
+  input: enterInput,
+  output: fakeStream
+});
+setTimeout(() => {
+  enterInput.emit("data", Buffer.from("\r\n"));
+}, 0);
+assert.equal(await enterPromise, "project");
+assert.equal(enterInput.isRaw, false);
+
 const writes = [];
 const originalLog = console.log;
 console.log = (...args) => writes.push(args.join(" "));

@@ -167,20 +167,20 @@ export async function select(label, choices, defaultValue = "", options = {}) {
 
     function onData(buffer) {
       const sequence = buffer.toString("utf8");
-      if (sequence === "\u0003") {
+      if (sequence.includes("\u0003")) {
         output.write("\n");
         process.exit(130);
       }
-      if (sequence === "\r" || sequence === "\n") {
+      if (sequence.includes("\r") || sequence.includes("\n")) {
         done(values[index].value);
-      } else if (sequence === "\u001b") {
-        done(values[defaultIndex]?.value || values[0].value);
-      } else if (sequence === "\u001b[A") {
+      } else if (sequence.includes("\u001b[A")) {
         index = (index - 1 + values.length) % values.length;
         render();
-      } else if (sequence === "\u001b[B") {
+      } else if (sequence.includes("\u001b[B")) {
         index = (index + 1) % values.length;
         render();
+      } else if (sequence === "\u001b") {
+        done(values[defaultIndex]?.value || values[0].value);
       }
     }
 
