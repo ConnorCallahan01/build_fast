@@ -192,16 +192,27 @@ Claude Code is the only supported adapter today. Unsupported adapters fail clear
 
 ## Ship Preview
 
-Preview branch/commit/push commands:
+Preview branch/commit/push/PR commands:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --pr
 ```
 
-Apply the branch/commit/push flow:
+The preview prints the target git root, pathspec, changed files, uncollected completed worktree output, and the commands it would run.
+
+Apply the branch/commit/push flow and create a draft PR:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr
 ```
 
-Add `--pr` to attempt draft PR creation through `gh`.
+Useful flags:
+
+| Flag | Purpose |
+| --- | --- |
+| `--branch` | Branch to create or reuse |
+| `--message` | Commit message |
+| `--pr` | Open a draft PR through `gh pr create` |
+| `--force` | Allow shipping current checkout even when uncollected worktree output exists |
+
+On success, `ship` records branch, commit, repo URL, PR URL, and shipped timestamp in local spec state, syncs Notion `GitHub Repo`/`GitHub PR` properties when present, and appends a ship summary.

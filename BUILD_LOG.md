@@ -498,3 +498,14 @@ Added the first explicit final-pass QA path:
 - Duplicate bug entries are deduped across reruns by source/title/details/command/spec.
 
 The current Notion behavior uses the existing Spec Tasks data source for bug-fix work. A dedicated Notion Bugs database remains a roadmap item.
+
+### Step 34: Guarded GitHub Ship Flow
+
+Hardened the `ship` command so it can complete the handoff from local collected work to GitHub review:
+
+- Preview mode now shows the git root, target pathspec, changed files, and any uncollected completed worktree output.
+- Apply mode refuses to ship when uncollected completed worktree output still exists unless `--force` is supplied.
+- Apply mode creates or reuses the requested branch, stages only the target project path, commits, pushes, and optionally opens a draft PR with `gh pr create`.
+- If PR creation fails because a PR already exists, `ship` attempts to recover the existing PR URL.
+- Ship metadata now records branch, commit, repo URL, PR URL, message, and timestamp in local spec/program state.
+- Notion sync now writes `GitHub Repo` and `GitHub PR` properties when those fields exist, then appends a ship summary.

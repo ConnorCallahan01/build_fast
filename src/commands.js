@@ -2006,14 +2006,15 @@ function hasProperties(source, names) {
   return names.every((name) => source.properties?.[name]);
 }
 
-function buildSpecProperties(spec) {
+function buildSpecProperties(spec, dataSource = {}) {
   const status = spec.status === "completed" ? "Shipped" : spec.status === "planned" ? "Draft" : "Building";
   return cleanProperties({
     Name: notionTitle(spec.title),
     Status: notionStatus(status),
     Project: notionRichText(spec.project),
-    "GitHub Repo": notionUrl("")
-  });
+    "GitHub Repo": notionUrl(spec.ship?.repoUrl || spec.githubRepoUrl || ""),
+    "GitHub PR": notionUrl(spec.ship?.prUrl || spec.githubPrUrl || "")
+  }, dataSource.properties);
 }
 
 function buildTaskProperties(task, dataSource, specPageId) {
@@ -2592,7 +2593,8 @@ async function ship(flags) {
   const notionUrl = requireFlag(flags, "ntn");
   const spec = await loadSpec(config, notionUrl);
   const program = await loadProgram(config, notionUrl);
-  const target = spec || (program ? programToStandaloneSpec(program, program.specs.at(-1)) : undefined);
+  const programSpec = program?.specs?.at(-1);
+  const target = spec || (program && programSpec ? programToStandaloneSpec(program, programSpec) : undefined);
   if (!target) throw new Error("No local spec or program found. Run plan/drive first.");
 
   const projectRoot = await resolveGitRoot(target.project);
@@ -2600,15 +2602,27 @@ async function ship(flags) {
   const message = optionalString(flags, "message", `build_fast: ${target.title}`);
   const apply = flags.apply === true || flags.apply === "true";
   const createPr = flags.pr === true || flags.pr === "true";
+  const force = flags.force === true || flags.force === "true";
+  const projectPathspec = await gitPathspec(projectRoot, target.project);
+  const collection = await collectSummary(config, notionUrl, target, undefined, { uncollectedOnly: true, skipMissing: true });
+  const changedFiles = await gitChangedFiles(projectRoot, projectPathspec);
+  const repoUrl = await gitRemoteUrl(projectRoot);
 
   if (!apply) {
     console.log("Ship preview");
     console.log(`Project git root: ${projectRoot}`);
+    console.log(`Project pathspec: ${projectPathspec}`);
     console.log(`Branch: ${branch}`);
     console.log(`Commit message: ${message}`);
+    console.log(`Changed files: ${changedFiles.length}`);
+    for (const file of changedFiles) console.log(`  ${file}`);
+    if (collection.reports.length) {
+      console.log("Uncollected completed worktree output:");
+      for (const report of collection.reports) console.log(`  ${report.task.id}: ${report.changedFiles.length} file${report.changedFiles.length === 1 ? "" : "s"}`);
+    }
     console.log("Commands:");
-    console.log(`  git -C ${projectRoot} switch -c ${branch}`);
-    console.log(`  git -C ${projectRoot} add ${target.project}`);
+    console.log(`  git -C ${projectRoot} switch -c ${branch}  # or switch existing branch`);
+    console.log(`  git -C ${projectRoot} add -- ${projectPathspec}`);
     console.log(`  git -C ${projectRoot} commit -m ${JSON.stringify(message)}`);
     console.log(`  git -C ${projectRoot} push -u origin ${branch}`);
     if (createPr) console.log(`  gh pr create --draft --title ${JSON.stringify(target.title)} --body <generated body>`);
@@ -2616,12 +2630,28 @@ async function ship(flags) {
     return;
   }
 
-  await git(["-C", projectRoot, "switch", "-c", branch]);
-  await git(["-C", projectRoot, "add", target.project]);
+  if (collection.reports.length && !force) {
+    throw new Error(
+      [
+        "Ship refused because completed worktree output has not been collected.",
+        "Run `build_fast collect --ntn <page>` to inspect it, then collect/apply the intended task.",
+        "Use --force only if you intentionally want to ship the current checkout without collecting those outputs."
+      ].join("\n")
+    );
+  }
+  if (!changedFiles.length) {
+    throw new Error(`No git changes found under ${projectPathspec}. Nothing to ship.`);
+  }
+
+  await switchShipBranch(projectRoot, branch);
+  await git(["-C", projectRoot, "add", "--", projectPathspec]);
+  const staged = await gitChangedFiles(projectRoot, projectPathspec, { staged: true });
+  if (!staged.length) throw new Error(`No staged changes found under ${projectPathspec}. Nothing to commit.`);
   await git(["-C", projectRoot, "commit", "-m", message]);
   await git(["-C", projectRoot, "push", "-u", "origin", branch]);
   console.log(`Pushed ${branch}.`);
 
+  let prUrl = "";
   if (createPr) {
     const body = shipPrBody(target);
     try {
@@ -2629,11 +2659,29 @@ async function ship(flags) {
         cwd: projectRoot,
         timeout: 30000
       });
+      prUrl = stdout.trim().split("\n").find((line) => /^https?:\/\//.test(line.trim()))?.trim() || "";
       console.log(stdout.trim());
     } catch (error) {
-      console.log(`PR creation skipped: ${firstOutputLine(error.stderr || error.stdout || error.message)}`);
+      console.log(`PR creation failed: ${firstOutputLine(error.stderr || error.stdout || error.message)}`);
+      prUrl = await existingPrUrl(projectRoot, branch);
+      if (prUrl) console.log(`Using existing PR: ${prUrl}`);
     }
   }
+
+  const shippedAt = nowIso();
+  const shipPatch = {
+    branch,
+    commit: (await git(["-C", projectRoot, "rev-parse", "--short", "HEAD"])).trim(),
+    repoUrl,
+    prUrl,
+    message,
+    shippedAt
+  };
+  await saveShipMetadata({ config, notionUrl, spec, program, programSpec, shipPatch });
+  await sync({ ntn: notionUrl });
+  const syncedTarget = await loadShipSummaryTarget(config, notionUrl, spec ? undefined : programSpec?.id);
+  await writeShipSummary(config, syncedTarget?.notion?.specPageUrl || target.notion?.specPageUrl || notionUrl, syncedTarget || target, shipPatch);
+  console.log(`Ship metadata synced${prUrl ? `: ${prUrl}` : "."}`);
 }
 
 function shipPrBody(spec) {
@@ -2649,6 +2697,95 @@ function shipPrBody(spec) {
     "",
     "Generated by build_fast."
   ].join("\n");
+}
+
+async function switchShipBranch(projectRoot, branch) {
+  const localBranches = (await git(["-C", projectRoot, "branch", "--list", branch])).trim();
+  if (localBranches) {
+    await git(["-C", projectRoot, "switch", branch]);
+    return;
+  }
+  await git(["-C", projectRoot, "switch", "-c", branch]);
+}
+
+async function gitPathspec(projectRoot, projectDir) {
+  const relative = path.relative(projectRoot, projectDir) || ".";
+  if (isUnsafeRelativePath(relative)) throw new Error(`Unsafe project path outside git root: ${projectDir}`);
+  return relative;
+}
+
+async function gitChangedFiles(projectRoot, pathspec, options = {}) {
+  const args = ["-C", projectRoot, "diff", "--name-only"];
+  if (options.staged) args.push("--cached");
+  args.push("--", pathspec);
+  const tracked = (await git(args)).split("\n").map((line) => line.trim()).filter(Boolean);
+  if (options.staged) return tracked;
+  const untracked = (await git(["-C", projectRoot, "ls-files", "--others", "--exclude-standard", "--", pathspec]))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return [...new Set([...tracked, ...untracked])];
+}
+
+async function gitRemoteUrl(projectRoot) {
+  try {
+    return (await git(["-C", projectRoot, "remote", "get-url", "origin"])).trim();
+  } catch {
+    return "";
+  }
+}
+
+async function existingPrUrl(projectRoot, branch) {
+  try {
+    const { stdout } = await execFileAsync("gh", ["pr", "view", branch, "--json", "url", "--jq", ".url"], {
+      cwd: projectRoot,
+      timeout: 30000
+    });
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+}
+
+async function saveShipMetadata({ config, notionUrl, spec, program, programSpec, shipPatch }) {
+  if (spec) {
+    await saveSpec(config, notionUrl, {
+      ...spec,
+      status: "completed",
+      ship: shipPatch,
+      githubRepoUrl: shipPatch.repoUrl,
+      githubPrUrl: shipPatch.prUrl,
+      updatedAt: nowIso()
+    });
+    return;
+  }
+  if (!program || !programSpec) return;
+  const updatedProgram = updateProgramSpec(program, programSpec.id, {
+    status: "completed",
+    ship: shipPatch,
+    githubRepoUrl: shipPatch.repoUrl,
+    githubPrUrl: shipPatch.prUrl
+  });
+  await saveProgram(config, notionUrl, updatedProgram);
+}
+
+async function loadShipSummaryTarget(config, notionUrl, programSpecId) {
+  if (!programSpecId) return loadSpec(config, notionUrl);
+  const program = await loadProgram(config, notionUrl);
+  const spec = program?.specs?.find((candidate) => candidate.id === programSpecId);
+  return program && spec ? programToStandaloneSpec(program, spec) : undefined;
+}
+
+async function writeShipSummary(config, notionTarget, spec, shipPatch) {
+  const lines = [
+    "## build_fast Ship",
+    `Branch: ${shipPatch.branch}`,
+    `Commit: ${shipPatch.commit}`,
+    shipPatch.repoUrl ? `Repo: ${shipPatch.repoUrl}` : null,
+    shipPatch.prUrl ? `PR: ${shipPatch.prUrl}` : "PR: not created",
+    `Shipped: ${shipPatch.shippedAt}`
+  ].filter(Boolean);
+  await writeToNotion(config, notionTarget, lines.join("\n\n"), { label: `ship ${spec.title}` });
 }
 
 async function writeToNotion(config, notionUrl, markdown, options = {}) {

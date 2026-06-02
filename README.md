@@ -108,7 +108,7 @@ node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
 | `qa` | Run structured QA checks, currently browser demo checks |
 | `bugs` | Inspect logged QA/feedback bugs or convert them into fix tasks |
 | `stop` | Mark active workers stopped in local state |
-| `ship` | Preview or apply branch/commit/push/PR handoff |
+| `ship` | Preview or apply guarded branch/commit/push/PR handoff |
 | `workers` | List supported worker adapters |
 
 ## Final QA And Bug Fix Pass
@@ -137,6 +137,22 @@ For one-command QA-to-task creation:
 ```bash
 node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
 ```
+
+## Ship To GitHub
+
+Preview the release handoff first:
+
+```bash
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --pr
+```
+
+Apply it when the preview is right:
+
+```bash
+node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr
+```
+
+`ship` refuses to apply when completed worktree output is still uncollected, commits only the target project path, pushes the branch, opens a draft PR through `gh` when requested, then syncs repo/PR metadata back to Notion.
 
 ## Notion Setup
 

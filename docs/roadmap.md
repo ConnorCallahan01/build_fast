@@ -58,8 +58,8 @@
 
 ### GitHub Integration
 
-- Create branches and PRs from collected output. MVP `ship` preview/apply path added.
-- Link Notion specs to GitHub PRs.
+- Create branches and PRs from collected output. Guarded `ship --apply --pr` MVP added.
+- Link Notion specs to GitHub PRs. MVP writes repo/PR URLs when the Notion properties exist.
 - Pull CI status back into Notion.
 - Support PR review comments as follow-up tasks.
 
