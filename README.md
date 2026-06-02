@@ -141,6 +141,14 @@ node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
 
 Browser QA fetches the served HTML, verifies expected UI anchors, resolves linked stylesheets/scripts the same way a browser does, and checks those assets return `200` with CSS/JavaScript MIME types. This catches broken paths like a page served at `/` linking to `./styles.css` when the stylesheet actually lives under `/demo/styles.css`.
 
+Run browser QA automatically at the end of `drive`:
+
+```bash
+node bin/build_fast.js drive --ntn "$NTN" --qa browser
+```
+
+If final QA fails, `drive` logs bugs, creates `[bug]` Spec Tasks, syncs them to Notion, and stops so the next `drive` run can launch fresh fix workers.
+
 Specs can define a browser QA profile so the checks are project-specific instead of Orbit-specific:
 
 ```json

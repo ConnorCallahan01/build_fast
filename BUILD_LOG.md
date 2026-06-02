@@ -546,3 +546,13 @@ Generalized browser QA beyond the Orbit Notes fixture:
 - Status output shows when browser QA is configured.
 - The old Orbit Notes assumptions remain as a fallback for existing local tests.
 - Added regression coverage for profile selector/text/module/asset checks.
+
+### Step 38: Drive Final Browser QA
+
+Added `drive --qa browser` as an optional final QA pass:
+
+- After normal feedback checks pass, single-spec drive can run browser QA automatically.
+- Program drive runs browser QA after all specs complete.
+- QA failures are logged to the bug ledger and converted into `[bug]` Spec Tasks.
+- Program-mode QA bug tasks are written back into the active program spec so rerunning `drive` can launch fresh fix workers.
+- `--qa` without a value is treated as `--qa browser`.

@@ -85,6 +85,7 @@ Useful drive flags:
 | `--max-repairs` | Maximum feedback repair tasks per spec, default `2` |
 | `--worker claude` | Select the current worker adapter |
 | `--parallel smart` | Group ready tasks conservatively using expected files, parallel groups, risk, and task type |
+| `--qa browser` | Run browser QA as the final drive pass; failures become bug-fix tasks |
 
 You can also drive directly from a goal string:
 
@@ -163,6 +164,14 @@ Run browser QA against the active spec/program project:
 ```bash
 node bin/build_fast.js qa --ntn "$NTN" --type browser
 ```
+
+Run browser QA automatically after `drive` completes feedback checks:
+
+```bash
+node bin/build_fast.js drive --ntn "$NTN" --qa browser
+```
+
+When final QA fails, `drive` logs bugs, creates `[bug]` Spec Tasks, syncs Notion, and stops. Rerun `drive` to let fresh workers repair those QA bugs.
 
 The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types.
 

@@ -73,6 +73,7 @@ node bin/build_fast.js drive \
   --ntn "$NTN" \
   --from-goal \
   --parallel smart \
+  --qa browser \
   --autopilot junior_mode \
   --permission-profile managed \
   --concurrency 2 \
@@ -89,7 +90,9 @@ node bin/build_fast.js drive \
 - overlay completed dependency outputs into dependent task worktrees
 - collect the recommended integrated task
 - run feedback checks
+- run browser QA when `--qa browser` is enabled
 - create a focused repair task when feedback checks fail, up to the configured repair limit
+- create `[bug]` tasks when final browser QA fails
 - sync final status back to Notion
 
 Autopilot behavior:
@@ -253,6 +256,14 @@ Use this after a UI/demo-oriented run. The current browser QA MVP assumes the ta
 ```bash
 node bin/build_fast.js qa --ntn "$NTN" --type browser
 ```
+
+To make browser QA part of the main drive loop:
+
+```bash
+node bin/build_fast.js drive --ntn "$NTN" --qa browser
+```
+
+If final QA fails, `drive` logs the failures to the bug ledger, creates `[bug]` Spec Tasks, syncs them to Notion, and stops. Rerun `drive` to fix those QA bugs with fresh workers.
 
 The QA command starts the demo, waits for the page, fetches the HTML, and checks for:
 

@@ -22,6 +22,7 @@
 ### Safer Drive Mode
 
 - Add smart parallel execution for independent tasks. MVP `--parallel smart` added.
+- Run browser QA as an optional final drive pass. MVP `--qa browser` added.
 - Improve feedback-loop command validation.
 - Make failed feedback checks easier to inspect and rerun. MVP repair-task loop added.
 - Log feedback and QA bugs into a ledger and convert them into final-pass fix tasks. MVP added.
