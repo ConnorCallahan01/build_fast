@@ -1065,8 +1065,6 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
   let iterations = 0;
   const maxIterations = Math.max(1, Number(optionalString(flags, "max-iterations", "20")));
   while (iterations < maxIterations) {
-    completedSpec = await resolveCompletedBugTasks(config, notionUrl, completedSpec);
-
     program = await loadProgram(config, notionUrl);
     const ready = readyProgramSpecs(program);
     if (!ready.length) break;
@@ -1184,6 +1182,8 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       }
       throw new Error(`Drive feedback checks failed for ${nextSpec.id}.`);
     }
+
+    completedSpec = await resolveCompletedBugTasks(config, notionUrl, completedSpec);
 
     program = await loadProgram(config, notionUrl);
     const completedTasks = completedSpec.tasks.map((t) => t.id);
