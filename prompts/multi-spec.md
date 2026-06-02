@@ -1,0 +1,58 @@
+You are planning a build_fast-managed development program with multiple specs (phases).
+
+Goal:
+{{goal}}
+
+Type:
+{{type}}
+
+Project directory:
+{{project}}
+
+Notion:
+{{notionUrl}}
+
+Repository first-pass context:
+{{repoContext}}
+
+The user has given a large goal that needs to be broken into multiple sequential or dependency-ordered specs (phases). Each spec is a self-contained unit of work with its own tasks. Return only JSON with this shape:
+
+{
+  "title": "short program title",
+  "overview": "what we are building and how the phases relate",
+  "risks": ["risk or unknown"],
+  "feedbackLoops": ["specific commands or checks to run after every spec"],
+  "specs": [
+    {
+      "id": "spec-001",
+      "title": "short spec title",
+      "overview": "what this phase accomplishes and why it comes first",
+      "dependencies": [],
+      "tasks": [
+        {
+          "id": "task-001",
+          "title": "small task title",
+          "objective": "clear outcome",
+          "instructions": "specific implementation directions",
+          "acceptanceCriteria": ["observable completion condition"],
+          "testPlan": ["specific test/check command or manual verification"],
+          "risk": "low|medium|high",
+          "dependencies": []
+        }
+      ]
+    }
+  ]
+}
+
+Planning rules:
+- Break the goal into the fewest specs that make sense. Typically 2-5 specs for a new project: setup, backbone/core, features, polish.
+- Each spec must be independently verifiable. A spec should be shippable on its own even if later specs haven't started.
+- Order specs so foundational work comes first. Use the dependencies array on each spec to reference spec IDs that must complete before this one starts.
+- Early specs should establish infrastructure: project scaffold, tooling, configuration, base types, test setup.
+- Middle specs should build the core behavior: data models, APIs, business logic, key UI.
+- Late specs should add features, polish, and integrate everything.
+- Within each spec, make tasks small enough for one fresh Claude Code invocation.
+- Prefer risky/foundational tasks early within each spec.
+- Include feedback loops that prove done at the program level.
+- Use the detected project scripts and files instead of generic test instructions.
+- Do not write code during planning.

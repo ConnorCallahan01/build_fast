@@ -120,12 +120,14 @@ Commands:
   goal   --goal "..." --ntn <notion-url> --project <dir> --type <type> [--yes|--interactive]
   plan   --goal "..." --ntn <notion-url> --project <dir> --type <type>
          [--no-agent for deterministic local planning]
+         Types: feature, bug, chore (single spec)
+                project, refactor, init, overhaul (multi-spec program)
   tasks  --ntn <notion-url> [regenerates from an existing local spec]
   start  --goal "..." --ntn <notion-url> --project <dir> --type <type> --autopilot junior_mode
   drive  --ntn <notion-url> [--goal "..." | --from-goal] [--project <dir>] [--type <type>]
   run    --ntn <notion-url> [--autopilot intern_mode|junior_mode|boss_mode]
   swarm  --ntn <notion-url> [--concurrency 2] [--max-tasks 2]
-  status --ntn <notion-url>
+  status --ntn <notion-url> [--spec spec-001]
   sync   --ntn <notion-url> [--mode data-source|blocks]
   compact --ntn <notion-url> [--keep-runs 1]
   collect --ntn <notion-url> [--task task-003] [--apply] [--force]

@@ -410,3 +410,52 @@ Expanded `status` from a task list into a lightweight dashboard:
 - Shows feedback loops from repo-aware planning.
 - Shows collection overlap warnings and recommended integration task.
 - Shows task branch/worktree metadata when present.
+
+### Step 29: Program Mode Stabilization
+
+The next product push is larger goals that break into multiple specs/phases instead of one flat task list. An uncommitted program-mode attempt existed, but the key bug was that later spec worktrees were still created from git `HEAD`. If spec 1 had been collected into the main checkout but not committed, spec 2 workers could miss that previous spec output.
+
+Stabilized the direction by:
+
+- Treating `project`, `refactor`, `init`, and `overhaul` as multi-spec program types.
+- Adding a `multi-spec.md` planning prompt for phased programs.
+- Adding program ledger helpers under `.build_fast/specs/<id>/program/program.json`.
+- Adding program-aware `plan`, `drive`, `status`, `sync`, `compact`, `collect`, and `cleanup` paths.
+- Carrying the current target project snapshot into each program worktree before workers run, so later specs can build on collected-but-uncommitted earlier spec output.
+- Marking programs completed when every spec completes.
+- Adding a no-agent regression test for program plan/status/drive ledger behavior.
+
+This still needs a live agent-backed program run before it should be considered fully proven.
+
+### Step 30: Live Program-Mode Smoke
+
+Ran a live agent-backed program-mode smoke against an ignored `test_projects/orbit_notes` fixture.
+
+The run proved the right high-level shape:
+
+- `drive --type project` generated a two-spec program.
+- Spec 2 correctly depended on Spec 1.
+- Workers ran through Claude Code in worktrees.
+- Program `status` showed `2/2` specs completed.
+- The target fixture passed `npm test` and `node --check src/orbit-notes.js`.
+
+The live run also exposed important orchestration bugs:
+
+- Worktree recovery aborted when deleting a branch that did not exist.
+- Ignored target projects were invisible to git-based collection, so worker changes could be missed.
+- Program collection applied overlapping task outputs in task order, which could lose earlier task work.
+- Dependency overlays copied from repo root paths instead of the target project subdir.
+- Program tasks without explicit dependencies did not inherit prior completed task output inside the same spec.
+- Generated feedback-loop prose such as `npm test (must stay green...)` could be executed literally.
+- `git diff --stat` style generated inspection commands are not reliable feedback checks for ignored fixtures.
+
+Fixed those issues by:
+
+- Making worktree branch cleanup tolerant.
+- Falling back to content comparison for collection when git sees no changes.
+- Applying the recommended integration task when program collection sees overlapping outputs.
+- Using the target project subdir for dependency overlays.
+- Overlaying prior completed tasks for program specs, even when the planner omits explicit task dependencies.
+- Tightening feedback command normalization and rejecting git inspection commands as automated feedback loops.
+
+Remaining caveat: the first live run collected some output before the overlap fix landed, so later workers recovered additively. A fresh run after the fixes generated the right program shape and completed, but we should add automated tests for overlay propagation before calling program mode production-grade.

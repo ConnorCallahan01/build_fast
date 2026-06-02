@@ -17,7 +17,7 @@ export async function scanRepo(projectDir) {
   return {
     projectDir,
     gitRoot: root,
-    projectRelativePath: path.relative(root, projectDir) || ".",
+    projectRelativePath: path.relative(root, projectDir) || "",
     git: {
       branch: await gitValue(root, ["branch", "--show-current"]),
       head: await gitValue(root, ["rev-parse", "--short", "HEAD"]),

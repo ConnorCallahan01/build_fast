@@ -86,6 +86,158 @@ export function makeSpec({ goal, type, project, notionUrl, plan }) {
   };
 }
 
+export const MULTI_SPEC_TYPES = new Set(["project", "refactor", "init", "overhaul"]);
+
+export function isMultiSpecType(type) {
+  return MULTI_SPEC_TYPES.has(String(type || "").toLowerCase());
+}
+
+export function programDir(config, notionUrl, cwd = process.cwd()) {
+  return path.join(specDir(config, notionUrl, cwd), "program");
+}
+
+export function makeProgram({ goal, type, project, notionUrl, plan }) {
+  const specs = (plan?.specs || []).map((raw, index) => {
+    const specSlug = slugify(raw.title || `spec-${index + 1}`);
+    const specId = raw.id || `spec-${String(index + 1).padStart(3, "0")}`;
+    return {
+      id: specId,
+      title: raw.title || `Spec ${index + 1}`,
+      slug: specSlug,
+      overview: raw.overview || "",
+      dependencies: raw.dependencies || [],
+      order: index + 1,
+      status: "planned",
+      notion: {},
+      tasks: (raw.tasks || []).map((task, taskIndex) => ({
+        id: task.id || `task-${String(taskIndex + 1).padStart(3, "0")}`,
+        title: task.title || `Task ${taskIndex + 1}`,
+        status: "pending",
+        order: taskIndex + 1,
+        objective: task.objective || "",
+        instructions: task.instructions || "",
+        acceptanceCriteria: task.acceptanceCriteria || [],
+        testPlan: task.testPlan || [],
+        risk: task.risk || "medium",
+        dependencies: task.dependencies || []
+      })),
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    };
+  });
+
+  return {
+    id: keyFromNotion(notionUrl),
+    title: plan?.title || goal.slice(0, 80),
+    slug: slugify(plan?.title || goal.slice(0, 60)),
+    goal,
+    type,
+    project,
+    notionUrl,
+    overview: plan?.overview || "",
+    risks: plan?.risks || [],
+    feedbackLoops: plan?.feedbackLoops || [],
+    specs,
+    status: "planned",
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+}
+
+export async function saveProgram(config, notionUrl, program, cwd = process.cwd()) {
+  const dir = programDir(config, notionUrl, cwd);
+  await ensureDir(dir);
+  await writeJson(path.join(dir, "program.json"), program);
+}
+
+export async function loadProgram(config, notionUrl, cwd = process.cwd()) {
+  return readJson(path.join(programDir(config, notionUrl, cwd), "program.json"), undefined);
+}
+
+export async function loadProgramSpec(config, notionUrl, specId, cwd = process.cwd()) {
+  const program = await loadProgram(config, notionUrl, cwd);
+  if (!program) return undefined;
+  return program.specs.find((s) => s.id === specId);
+}
+
+export async function saveProgramSpec(config, notionUrl, updatedSpec, cwd = process.cwd()) {
+  const program = await loadProgram(config, notionUrl, cwd);
+  if (!program) throw new Error("No program found.");
+  program.specs = program.specs.map((s) => (s.id === updatedSpec.id ? updatedSpec : s));
+  program.updatedAt = nowIso();
+  await saveProgram(config, notionUrl, program, cwd);
+}
+
+export function readyProgramSpecs(program) {
+  const completedIds = new Set(
+    (program.specs || []).filter((s) => s.status === "completed").map((s) => s.id)
+  );
+  return [...(program.specs || [])]
+    .sort((a, b) => a.order - b.order)
+    .filter((s) => s.status === "planned" || s.status === "in_progress")
+    .filter((s) => (s.dependencies || []).every((dep) => completedIds.has(dep)));
+}
+
+export function programToStandaloneSpec(program, spec) {
+  const specTaskIds = new Set((spec.tasks || []).map((t) => t.id));
+  const resolvedDeps = new Set();
+  for (const ancestor of program.specs || []) {
+    if (ancestor.id === spec.id) break;
+    for (const t of ancestor.tasks || []) {
+      resolvedDeps.add(t.id);
+    }
+  }
+  return {
+    id: `${program.id}-${spec.id}`,
+    title: spec.title,
+    slug: spec.slug,
+    goal: program.goal,
+    type: program.type,
+    project: program.project,
+    notionUrl: program.notionUrl,
+    status: spec.status,
+    overview: spec.overview,
+    risks: program.risks || [],
+    feedbackLoops: program.feedbackLoops || [],
+    tasks: (spec.tasks || []).map((task) => {
+      const deps = (task.dependencies || []).filter((dep) => specTaskIds.has(dep));
+      const resolved = (task.dependencies || []).filter((dep) => !specTaskIds.has(dep) && resolvedDeps.has(dep));
+      return {
+        ...task,
+        dependencies: deps,
+        _resolvedCrossSpecDeps: resolved.length ? resolved : undefined
+      };
+    }),
+    createdAt: spec.createdAt,
+    updatedAt: spec.updatedAt,
+    notion: spec.notion || {},
+    _program: { id: program.id, specId: spec.id }
+  };
+}
+
+export function updateProgramSpec(program, specId, specPatch) {
+  return {
+    ...program,
+    updatedAt: nowIso(),
+    specs: program.specs.map((s) =>
+      s.id === specId ? { ...s, ...specPatch, updatedAt: nowIso() } : s
+    )
+  };
+}
+
+export function updateProgramSpecTask(program, specId, taskId, taskPatch) {
+  const spec = program.specs.find((s) => s.id === specId);
+  if (!spec) return program;
+  const updatedTasks = spec.tasks.map((t) =>
+    t.id === taskId ? { ...t, ...taskPatch, updatedAt: nowIso() } : t
+  );
+  const allDone = updatedTasks.every((t) => t.status === "completed");
+  return updateProgramSpec(program, specId, {
+    tasks: updatedTasks,
+    status: allDone ? "completed" : spec.status
+  });
+}
+
 export function attachNotionSpecPage(spec, page) {
   return {
     ...spec,

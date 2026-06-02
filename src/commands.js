@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
-import { cp, realpath } from "node:fs/promises";
+import { cp, mkdir, rm, realpath } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig, ensureConfig } from "./config.js";
 import { runClaude } from "./claude.js";
-import { makeSpec, loadSpec, saveSpec, specDir, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage } from "./ledger.js";
+import { makeSpec, loadSpec, saveSpec, specDir, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage, isMultiSpecType, makeProgram, loadProgram, saveProgram, readyProgramSpecs, programToStandaloneSpec, updateProgramSpec } from "./ledger.js";
 import { checkNotionPage, inspectNotionPage, markdownBlocks, NotionClient, parseNotionId, pageTitle, notionRelation, notionRichText, notionStatus, notionTitle, notionUrl } from "./notion.js";
 import { renderPrompt } from "./prompts.js";
 import { scanRepo } from "./repo-scan.js";
@@ -118,7 +118,7 @@ async function goal(flags) {
     createdAt: nowIso(),
     repoContext: {
       gitRoot: repoContext.gitRoot,
-      projectRelativePath: repoContext.projectRelativePath,
+      projectRelativePath: normalizeProjectSubdir(repoContext.projectRelativePath),
       feedbackLoops: repoContext.detected.feedbackLoops,
       scannedAt: nowIso()
     }
@@ -263,11 +263,14 @@ async function loadGoalContract(config, notionUrl) {
 async function plan(flags) {
   const config = await ensureConfig();
   const notionUrl = requireFlag(flags, "ntn");
+  const type = optionalString(flags, "type", "feature");
+  const project = normalizeProject(optionalString(flags, "project", process.cwd()));
+
+  if (isMultiSpecType(type)) return planProgram({ config, notionUrl, type, project, flags });
+
   const existing = await loadSpec(config, notionUrl);
   const goal = optionalString(flags, "goal", existing?.goal);
   if (!goal) throw new Error("Missing required flag: --goal");
-  const type = optionalString(flags, "type", existing?.type || "feature");
-  const project = normalizeProject(optionalString(flags, "project", existing?.project || process.cwd()));
   if (existing && flags.skipIfExists) {
     console.log(`Existing plan found: ${existing.title}`);
     return;
@@ -294,7 +297,7 @@ async function plan(flags) {
   const spec = makeSpec({ goal, type, project, notionUrl, plan: generated });
   spec.repoContext = {
     gitRoot: repoContext.gitRoot,
-    projectRelativePath: repoContext.projectRelativePath,
+    projectRelativePath: normalizeProjectSubdir(repoContext.projectRelativePath),
     feedbackLoops: repoContext.detected.feedbackLoops,
     scannedAt: nowIso()
   };
@@ -304,6 +307,73 @@ async function plan(flags) {
 
   console.log(`Planned ${spec.tasks.length} tasks for: ${spec.title}`);
   console.log(`Local spec: .build_fast/specs/${spec.id}/spec.json`);
+}
+
+async function planProgram({ config, notionUrl, type, project, flags }) {
+  const existing = await loadProgram(config, notionUrl);
+  const goal = optionalString(flags, "goal", existing?.goal);
+  if (!goal) throw new Error("Missing required flag: --goal");
+
+  const repoContext = await scanRepo(project);
+  let generated;
+  if (flags["no-agent"]) {
+    generated = normalizeProgramPlan(null, goal, repoContext);
+  } else {
+    const prompt = await renderPrompt("multi-spec.md", { goal, type, project, notionUrl, repoContext });
+    const runDir = path.join(process.cwd(), ".build_fast", "planning", `${Date.now()}`);
+    await writeJson(path.join(runDir, "repo-context.json"), repoContext);
+    const result = await runClaude({
+      config,
+      prompt,
+      projectDir: project,
+      runDir,
+      autopilot: "intern_mode",
+      permissionProfile: "inherit"
+    });
+    generated = normalizeProgramPlan(result.parsed, goal, repoContext);
+  }
+
+  const program = makeProgram({ goal, type, project, notionUrl, plan: generated });
+  await saveProgram(config, notionUrl, program);
+
+  console.log(`Planned ${program.specs.length} specs for: ${program.title}`);
+  for (const spec of program.specs) {
+    const depLabel = spec.dependencies.length ? ` (depends: ${spec.dependencies.join(", ")})` : "";
+    console.log(`  ${spec.id}: ${spec.title} — ${spec.tasks.length} tasks${depLabel}`);
+  }
+  console.log(`Local program: .build_fast/specs/${program.id}/program/program.json`);
+}
+
+function normalizeProgramPlan(parsed, goal, repoContext = undefined) {
+  const source = parsed?.structured_output || parsed;
+  if (source?.specs?.length) return source;
+  const feedbackLoops = repoContext?.detected?.feedbackLoops?.length ? repoContext.detected.feedbackLoops : ["npm test"];
+  return {
+    title: goal.slice(0, 80),
+    overview: `Implement: ${goal}`,
+    risks: [],
+    feedbackLoops,
+    specs: [
+      {
+        id: "spec-001",
+        title: "Full implementation",
+        overview: goal,
+        dependencies: [],
+        tasks: [
+          {
+            id: "task-001",
+            title: "Implement the requested goal",
+            objective: goal,
+            instructions: "Inspect the codebase, make the smallest coherent implementation, and keep changes scoped to the goal.",
+            acceptanceCriteria: ["The requested behavior is implemented.", "Relevant tests or checks pass."],
+            testPlan: feedbackLoops,
+            risk: "medium",
+            dependencies: []
+          }
+        ]
+      }
+    ]
+  };
 }
 
 function normalizePlan(parsed, goal, repoContext = undefined) {
@@ -395,15 +465,23 @@ async function drive(flags) {
   let config = await ensureConfig();
   const goalContract = flags["from-goal"] ? await loadGoalContract(config, notionUrl) : undefined;
   if (flags["from-goal"] && !goalContract) throw new Error("No saved goal contract found. Run `build_fast goal --goal ... --ntn ... --project ...` first.");
-  let spec = await loadSpec(config, notionUrl);
+
   const requestedGoal = goalContract?.finalGoal || optionalString(flags, "goal", undefined);
+  const type = goalContract?.type || optionalString(flags, "type", "feature");
+
+  const existingProgram = await loadProgram(config, notionUrl);
+  if (isMultiSpecType(type) || existingProgram) {
+    return driveProgram({ config, notionUrl, goal: requestedGoal, type: existingProgram?.type || type, goalContract, flags, autopilot, permissionProfile, concurrency, maxTasks });
+  }
+
+  let spec = await loadSpec(config, notionUrl);
   if (!spec || (requestedGoal && requestedGoal !== spec.goal)) {
     if (!requestedGoal) throw new Error("No local spec found. Pass --goal, use --from-goal, or run plan first.");
     await plan({
       ...flags,
       goal: requestedGoal,
       project: goalContract?.project || flags.project,
-      type: goalContract?.type || flags.type
+      type
     });
     config = await loadConfig();
     spec = await loadSpec(config, notionUrl);
@@ -463,6 +541,151 @@ async function drive(flags) {
   console.log("Drive complete.");
 }
 
+async function driveProgram({ config, notionUrl, goal, type, goalContract, flags, autopilot, permissionProfile, concurrency, maxTasks }) {
+  let program = await loadProgram(config, notionUrl);
+  if (!program || (goal && goal !== program.goal)) {
+    if (!goal) throw new Error("No local program found. Pass --goal, use --from-goal, or run plan first.");
+    await plan({
+      ...flags,
+      goal,
+      project: goalContract?.project || flags.project,
+      type
+    });
+    config = await loadConfig();
+    program = await loadProgram(config, notionUrl);
+  }
+
+  await syncProgram({ config, notionUrl, program });
+  if (flags["no-agent"]) {
+    console.log("Drive no-agent smoke complete after plan/sync.");
+    return;
+  }
+
+  let iterations = 0;
+  const maxIterations = Math.max(1, Number(optionalString(flags, "max-iterations", "20")));
+  while (iterations < maxIterations) {
+    program = await loadProgram(config, notionUrl);
+    const ready = readyProgramSpecs(program);
+    if (!ready.length) break;
+
+    const nextSpec = ready[0];
+    console.log(`\nDrive: ${nextSpec.id} ${nextSpec.title}`);
+
+    const existingSpec = await loadSpec(config, notionUrl);
+    const isResumable = existingSpec
+      && existingSpec._program?.specId === nextSpec.id
+      && readyPendingTasks(existingSpec).length === 0
+      && (nextSpec.status === "in_progress" || await specFilesCollectable(existingSpec));
+    if (!isResumable) {
+      const standalone = programToStandaloneSpec(program, nextSpec);
+      const repoContext = await scanRepo(program.project);
+      standalone.repoContext = {
+        gitRoot: repoContext.gitRoot,
+        projectRelativePath: normalizeProjectSubdir(repoContext.projectRelativePath),
+        feedbackLoops: repoContext.detected.feedbackLoops,
+        scannedAt: nowIso()
+      };
+      await saveSpec(config, notionUrl, standalone);
+      program = updateProgramSpec(await loadProgram(config, notionUrl), nextSpec.id, { status: "in_progress" });
+      await saveProgram(config, notionUrl, program);
+    } else {
+      console.log(`Resuming ${nextSpec.id} from previous run (${existingSpec.tasks.filter(t => t.status === 'completed').length}/${existingSpec.tasks.length} tasks done)`);
+    }
+
+    let specIterations = 0;
+    const maxSpecIterations = Math.max(1, Number(optionalString(flags, "max-iterations", "20")));
+    while (specIterations < maxSpecIterations) {
+      let currentSpec = await loadSpec(config, notionUrl);
+      const pending = readyPendingTasks(currentSpec);
+      if (!pending.length) break;
+      await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks });
+      specIterations += 1;
+    }
+
+    let completedSpec = await loadSpec(config, notionUrl);
+    if (readyPendingTasks(completedSpec).length) {
+      throw new Error(`Drive stopped: ${nextSpec.id} has pending tasks after ${maxSpecIterations} swarm iterations.`);
+    }
+
+    const collection = await collectSummary(config, notionUrl, completedSpec, undefined, { uncollectedOnly: true, skipMissing: true });
+    if (collection.reports.length) {
+      const projectRoot = completedSpec.project;
+      const projectSubdir = normalizeProjectSubdir(completedSpec.repoContext?.projectRelativePath);
+      const reportsToApply = collection.overlaps.length && collection.recommendation
+        ? collection.reports.filter((report) => report.task.id === collection.recommendation.task.id)
+        : collection.reports;
+      if (collection.overlaps.length && collection.recommendation) {
+        console.log(`Drive applying recommended integration task ${collection.recommendation.task.id}: ${collection.recommendation.reason}`);
+      }
+      const orderedReports = [...reportsToApply].sort((a, b) => (a.task.order || 0) - (b.task.order || 0));
+      for (const report of orderedReports) {
+        const worktreeProjectDir = projectSubdir ? path.join(report.worktree, projectSubdir) : report.worktree;
+        if (report.changedFiles.length) {
+          console.log(`Drive applying ${report.task.id} (${report.changedFiles.length} files): ${report.task.title}`);
+          await applyCollectReport({ report, projectRoot, worktreeProjectDir });
+        } else {
+          const missingFiles = await collectMissingFiles(worktreeProjectDir, projectRoot);
+          if (missingFiles.length) {
+            console.log(`Drive applying ${report.task.id} (${missingFiles.length} missing files): ${report.task.title}`);
+            for (const file of missingFiles) {
+              await cp(path.join(worktreeProjectDir, file), path.join(projectRoot, file), { recursive: true });
+            }
+            report.changedFiles = missingFiles;
+          } else {
+            console.log(`Drive skipping ${report.task.id} (no changed or missing files)`);
+          }
+        }
+        const collectedAt = nowIso();
+        completedSpec = updateTask(completedSpec, report.task.id, { collectedAt, collectedFiles: report.changedFiles });
+        for (const overlay of report.task.lastResult?.dependencyOverlays || []) {
+          completedSpec = updateTask(completedSpec, overlay.taskId, { collectedAt, collectedBy: report.task.id, collectedFiles: overlay.files || [] });
+        }
+      }
+      await saveSpec(config, notionUrl, completedSpec);
+    }
+
+    completedSpec = await loadSpec(config, notionUrl);
+    const checks = await runFeedbackLoops(completedSpec);
+    for (const check of checks) {
+      console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
+    }
+    if (checks.some((check) => !check.ok)) {
+      throw new Error(`Drive feedback checks failed for ${nextSpec.id}.`);
+    }
+
+    program = await loadProgram(config, notionUrl);
+    const completedTasks = completedSpec.tasks.map((t) => t.id);
+    let updatedSpec = program.specs.find((s) => s.id === nextSpec.id);
+    updatedSpec = {
+      ...updatedSpec,
+      status: "completed",
+      tasks: completedSpec.tasks,
+      notion: completedSpec.notion,
+      updatedAt: nowIso()
+    };
+    program = updateProgramSpec(program, nextSpec.id, updatedSpec);
+    await saveProgram(config, notionUrl, program);
+
+    await syncProgram({ config, notionUrl, program });
+    console.log(`Spec ${nextSpec.id} complete.`);
+    iterations += 1;
+  }
+
+  program = await loadProgram(config, notionUrl);
+  const remaining = readyProgramSpecs(program);
+  if (remaining.length) {
+    throw new Error(`Drive stopped after ${maxIterations} spec iterations with pending specs remaining.`);
+  }
+
+  if ((program.specs || []).every((spec) => spec.status === "completed")) {
+    program = { ...program, status: "completed", updatedAt: nowIso() };
+    await saveProgram(config, notionUrl, program);
+    await syncProgram({ config, notionUrl, program });
+  }
+
+  console.log("Drive complete. All specs shipped.");
+}
+
 function shouldDriveApply(autopilot, collection) {
   if (!collection.reports.length) return { apply: false, reason: "no completed worktree-backed tasks found" };
   if (autopilot === "intern_mode") return { apply: false, reason: "intern_mode requires manual collection apply" };
@@ -509,20 +732,28 @@ function firstOutputLine(value) {
 }
 
 function normalizeFeedbackCommand(command) {
-  const value = String(command || "").trim();
+  let value = String(command || "").trim();
   if (!value) return "";
-  const normalized = value
-    .replace(/\s+[—–]\s+.*$/s, "")
-    .replace(/\s+\([^)]*\)\s*$/s, "")
-    .replace(/\s+-\s+.*$/s, "")
-    .trim();
-  if (!isRunnableFeedbackCommand(normalized)) return "";
-  return normalized;
+
+  const segments = value.split(/\s*(?:&&|&|;)\s*(?:then\s+)?/).map((s) => s.trim()).filter(Boolean);
+  for (const segment of segments.reverse()) {
+    const cleaned = segment
+      .replace(/\s+[—–]\s+.*$/s, "")
+      .replace(/\s+\(.*$/s, "")
+      .replace(/\s+\([^)]*\)\s*$/s, "")
+      .replace(/\s+-\s+.*$/s, "")
+      .trim();
+    if (!isRunnableFeedbackCommand(cleaned)) continue;
+    if (cleaned.startsWith("node ") && !cleaned.includes("--check") && !cleaned.includes("test")) continue;
+    return cleaned;
+  }
+  return "";
 }
 
 function isRunnableFeedbackCommand(command) {
   if (!command || command.includes("<") || command.includes(">")) return false;
   if (/\b(on|against|with)\s+the\b/i.test(command)) return false;
+  if (/^git\s+(diff|status|log|show)\b/.test(command)) return false;
   const executable = command.split(/\s+/)[0];
   return ["npm", "node", "git", "npx", "pnpm", "yarn", "cargo", "python", "python3", "pytest", "go", "make"].includes(executable);
 }
@@ -548,6 +779,7 @@ async function swarm(flags) {
   for (const task of candidates) {
     const assignment = buildWorktreeAssignment(spec, task, gitContext);
     await ensureWorktree(assignment);
+    await overlayProgramSnapshot(assignment);
     await overlayDependencyWorktrees(assignment);
     assignments.push(assignment);
     spec = updateTask(spec, task.id, {
@@ -556,6 +788,8 @@ async function swarm(flags) {
       lastResult: {
         branch: assignment.branch,
         worktree: assignment.worktreeDir,
+        baseHead: assignment.baseHead,
+        programSnapshotFiles: assignment.programSnapshotFiles,
         dependencyOverlays: assignment.dependencyOverlays
       }
     });
@@ -576,6 +810,8 @@ async function swarm(flags) {
         ...(result.patch.lastResult || {}),
         branch: result.assignment.branch,
         worktree: result.assignment.worktreeDir,
+        baseHead: result.assignment.baseHead,
+        programSnapshotFiles: result.assignment.programSnapshotFiles,
         dependencyOverlays: result.assignment.dependencyOverlays
       }
     });
@@ -586,6 +822,8 @@ async function swarm(flags) {
         ...(result.patch.lastResult || {}),
         branch: result.assignment.branch,
         worktree: result.assignment.worktreeDir,
+        baseHead: result.assignment.baseHead,
+        programSnapshotFiles: result.assignment.programSnapshotFiles,
         dependencyOverlays: result.assignment.dependencyOverlays
       }
     });
@@ -645,6 +883,15 @@ async function runSwarmAssignment({ config, notionUrl, autopilot, permissionProf
   return { assignment, task, patch };
 }
 
+async function specFilesCollectable(spec) {
+  const worktreeTasks = (spec.tasks || []).filter((t) => t.status === "completed" && t.lastResult?.worktree);
+  if (!worktreeTasks.length) return false;
+  for (const task of worktreeTasks) {
+    if (await pathExists(task.lastResult.worktree)) return true;
+  }
+  return false;
+}
+
 function readyPendingTasks(spec) {
   const completed = new Set((spec.tasks || []).filter((task) => task.status === "completed").map((task) => task.id));
   return [...(spec.tasks || [])]
@@ -696,26 +943,51 @@ function buildWorktreeAssignment(spec, task, gitContext) {
     workerProjectDir: path.join(worktreeDir, gitContext.projectRelativePath),
     gitRoot: gitContext.root,
     baseHead: gitContext.head,
+    programSnapshotFiles: [],
     dependencyOverlays: []
   };
 }
 
 async function ensureWorktree(assignment) {
-  if (await pathExists(assignment.worktreeDir)) return;
-  await git(["-C", assignment.gitRoot, "worktree", "add", "-B", assignment.branch, assignment.worktreeDir, "HEAD"]);
+  if (await pathExists(assignment.worktreeDir)) {
+    try {
+      await git(["-C", assignment.gitRoot, "worktree", "remove", "--force", assignment.worktreeDir]);
+    } catch {
+      await git(["-C", assignment.gitRoot, "worktree", "prune", "--expire=now"]);
+    }
+  }
+  try {
+    await git(["-C", assignment.gitRoot, "worktree", "add", "-B", assignment.branch, assignment.worktreeDir, "HEAD"]);
+  } catch (e) {
+    await git(["-C", assignment.gitRoot, "worktree", "prune", "--expire=now"]);
+    try {
+      await git(["-C", assignment.gitRoot, "branch", "-D", assignment.branch]);
+    } catch {
+      // Branch may not exist after a failed worktree add.
+    }
+    await git(["-C", assignment.gitRoot, "worktree", "add", "-B", assignment.branch, assignment.worktreeDir, "HEAD"]);
+  }
+}
+
+async function overlayProgramSnapshot(assignment) {
+  if (!assignment.spec?._program) return;
+  const files = await syncDirectorySnapshot(assignment.spec.project, assignment.workerProjectDir);
+  assignment.programSnapshotFiles = files;
 }
 
 async function overlayDependencyWorktrees(assignment) {
+  const projectSubdir = normalizeProjectSubdir(assignment.spec.repoContext?.projectRelativePath);
   const dependencies = dependencyTasksFor(assignment.spec, assignment.task);
   for (const dependency of dependencies) {
     const dependencyWorktree = dependency.lastResult?.worktree;
     if (!dependencyWorktree || !(await pathExists(dependencyWorktree))) continue;
-    const files = await worktreeChangedFiles(dependencyWorktree);
+    const files = await worktreeChangedFiles(dependencyWorktree, dependency.lastResult?.baseHead, projectSubdir);
+    const dependencyProjectDir = projectSubdir ? path.join(dependencyWorktree, projectSubdir) : dependencyWorktree;
     for (const file of files) {
       if (isUnsafeRelativePath(file)) {
         throw new Error(`Refusing to overlay unsafe dependency path from ${dependency.id}: ${file}`);
       }
-      await cp(path.join(dependencyWorktree, file), path.join(assignment.worktreeDir, file), { recursive: true });
+      await cp(path.join(dependencyProjectDir, file), path.join(assignment.workerProjectDir, file), { recursive: true });
     }
     assignment.dependencyOverlays.push({
       taskId: dependency.id,
@@ -727,7 +999,16 @@ async function overlayDependencyWorktrees(assignment) {
 
 function dependencyTasksFor(spec, task) {
   const byId = new Map((spec.tasks || []).map((candidate) => [candidate.id, candidate]));
-  return (task.dependencies || []).map((dependencyId) => byId.get(dependencyId)).filter(Boolean);
+  const dependencies = (task.dependencies || []).map((dependencyId) => byId.get(dependencyId)).filter(Boolean);
+  if (spec._program) {
+    const seen = new Set(dependencies.map((dependency) => dependency.id));
+    const priorCompleted = (spec.tasks || [])
+      .filter((candidate) => candidate.status === "completed")
+      .filter((candidate) => (candidate.order || 0) < (task.order || 0))
+      .filter((candidate) => !seen.has(candidate.id));
+    return [...dependencies, ...priorCompleted];
+  }
+  return dependencies;
 }
 
 async function git(args) {
@@ -818,10 +1099,14 @@ function taskPatchFromResult(result) {
 async function status(flags) {
   const config = await loadConfig();
   const notionUrl = requireFlag(flags, "ntn");
-  const spec = await loadSpec(config, notionUrl);
   const workers = await readActiveWorkers(config);
+
+  const program = await loadProgram(config, notionUrl);
+  if (program) return programStatus(program, config, notionUrl, workers, flags);
+
+  const spec = await loadSpec(config, notionUrl);
   if (!spec) {
-    console.log("No local spec found.");
+    console.log("No local spec or program found.");
     return;
   }
   const counts = taskCounts(spec);
@@ -859,6 +1144,46 @@ async function status(flags) {
   }
 }
 
+async function programStatus(program, config, notionUrl, workers, flags) {
+  const specFilter = optionalString(flags, "spec", undefined);
+  if (specFilter) {
+    const matched = program.specs.find((s) => s.id === specFilter);
+    if (!matched) {
+      console.log(`No spec found with id: ${specFilter}`);
+      return;
+    }
+    const standalone = programToStandaloneSpec(program, matched);
+    const counts = taskCounts(standalone);
+    console.log(`${matched.id}: ${matched.title} [${matched.status}]`);
+    console.log(`Tasks: ${counts.completed}/${counts.total} completed, ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.failed} failed`);
+    for (const task of matched.tasks) {
+      const collected = task.collectedAt ? " [collected]" : "";
+      console.log(`  ${task.status.padEnd(11)} ${task.id} ${task.title}${collected}`);
+    }
+    return;
+  }
+
+  const ready = readyProgramSpecs(program);
+  const completedCount = program.specs.filter((s) => s.status === "completed").length;
+  console.log(`${program.title} [${program.status}]`);
+  console.log(`Project: ${program.project}`);
+  console.log(`Specs: ${completedCount}/${program.specs.length} completed`);
+  console.log(`Next: ${ready.length ? `${ready[0].id} ${ready[0].title}` : "none"}`);
+  if (program.feedbackLoops?.length) console.log(`Feedback: ${program.feedbackLoops.join(" | ")}`);
+
+  console.log(`\nSpecs:`);
+  for (const spec of program.specs) {
+    const depLabel = spec.dependencies.length ? ` depends=[${spec.dependencies.join(", ")}]` : "";
+    const counts = taskCounts(spec);
+    console.log(`${spec.status.padEnd(11)} ${spec.id} ${spec.title} (${counts.completed}/${counts.total} tasks)${depLabel}`);
+  }
+
+  if (workers.length) {
+    console.log("\nActive workers:");
+    for (const worker of workers) console.log(`${worker.runId} ${worker.taskId} ${worker.status}`);
+  }
+}
+
 function taskCounts(spec) {
   const tasks = spec.tasks || [];
   return {
@@ -874,6 +1199,9 @@ function taskCounts(spec) {
 async function sync(flags) {
   const config = await loadConfig();
   const notionUrl = requireFlag(flags, "ntn");
+  const program = await loadProgram(config, notionUrl);
+  if (program) return syncProgram({ config, notionUrl, program });
+
   let spec = await loadSpec(config, notionUrl);
   if (!spec) throw new Error("No local spec found. Run plan first.");
 
@@ -890,17 +1218,57 @@ async function sync(flags) {
   }
 }
 
+async function syncProgram({ config, notionUrl, program }) {
+  if (!config.notionToken) {
+    console.log("Notion sync skipped: missing NOTION_API_TOKEN.");
+    return;
+  }
+  for (const spec of program.specs) {
+    const standalone = programToStandaloneSpec(program, spec);
+    const result = await syncToDataSources(config, notionUrl, standalone);
+    if (result.ok && result.spec) {
+      const updated = {
+        ...spec,
+        tasks: result.spec.tasks,
+        notion: result.spec.notion,
+        updatedAt: nowIso()
+      };
+      program = updateProgramSpec(program, spec.id, updated);
+    }
+  }
+  await saveProgram(config, notionUrl, program);
+  console.log(`Synced ${program.specs.length} specs to Notion`);
+}
+
 async function compact(flags) {
   const config = await loadConfig();
   const notionUrl = requireFlag(flags, "ntn");
-  const spec = await loadSpec(config, notionUrl);
-  if (!spec) throw new Error("No local spec found. Run plan first.");
-  if (!config.notionToken) throw new Error("Missing NOTION_API_TOKEN.");
-
   const keepRuns = Math.max(0, Number(optionalString(flags, "keep-runs", "1")));
+  if (!config.notionToken) throw new Error("Missing NOTION_API_TOKEN.");
   const notion = new NotionClient({ token: config.notionToken, version: config.notionVersion });
   let deleted = 0;
   let refreshed = 0;
+
+  const program = await loadProgram(config, notionUrl);
+  if (program) {
+    for (const spec of program.specs) {
+      if (spec.notion?.specPageId) {
+        await replaceManagedSection(notion, spec.notion.specPageId, "build_fast Sync Snapshot", formatSpecSnapshotMarkdown(programToStandaloneSpec(program, spec)));
+        refreshed += 1;
+      }
+      for (const task of spec.tasks || []) {
+        if (!task.notion?.taskPageId) continue;
+        deleted += await compactTaskPageRuns(notion, task.notion.taskPageId, keepRuns);
+        await replaceManagedSection(notion, task.notion.taskPageId, "build_fast Task Snapshot", formatTaskSnapshotMarkdown(task));
+        refreshed += 1;
+      }
+    }
+    console.log(`Compacted ${deleted} old run section${deleted === 1 ? "" : "s"} and refreshed ${refreshed} snapshot page${refreshed === 1 ? "" : "s"}.`);
+    return;
+  }
+
+  const spec = await loadSpec(config, notionUrl);
+  if (!spec) throw new Error("No local spec found. Run plan first.");
 
   if (spec.notion?.specPageId) {
     await replaceManagedSection(notion, spec.notion.specPageId, "build_fast Sync Snapshot", formatSpecSnapshotMarkdown(spec));
@@ -920,13 +1288,25 @@ async function compact(flags) {
 async function collect(flags) {
   const config = await loadConfig();
   const notionUrl = requireFlag(flags, "ntn");
-  const spec = await loadSpec(config, notionUrl);
-  if (!spec) throw new Error("No local spec found. Run plan first.");
-
   const apply = flags.apply === true || flags.apply === "true";
   const force = flags.force === true || flags.force === "true";
   const taskFilter = optionalString(flags, "task", undefined);
-  const projectRoot = await resolveGitRoot(spec.project);
+
+  const program = await loadProgram(config, notionUrl);
+  if (program) {
+    let spec = await loadSpec(config, notionUrl);
+    if (!spec) throw new Error("No active spec found in program drive. Run drive first.");
+    return collectSpec({ config, notionUrl, spec, apply, force, taskFilter });
+  }
+
+  let spec = await loadSpec(config, notionUrl);
+  if (!spec) throw new Error("No local spec found. Run plan first.");
+  return collectSpec({ config, notionUrl, spec, apply, force, taskFilter });
+}
+
+async function collectSpec({ config, notionUrl, spec, apply, force, taskFilter }) {
+  const projectRoot = spec.project;
+  const projectSubdir = normalizeProjectSubdir(spec.repoContext?.projectRelativePath);
   const { reports, overlaps, recommendation } = await collectSummary(config, notionUrl, spec, taskFilter);
 
   if (!reports.length) {
@@ -950,7 +1330,8 @@ async function collect(flags) {
   let nextSpec = spec;
   if (apply) {
     for (const report of reports) {
-      await applyCollectReport({ report, projectRoot });
+      const worktreeProjectDir = projectSubdir ? path.join(report.worktree, projectSubdir) : report.worktree;
+      await applyCollectReport({ report, projectRoot, worktreeProjectDir });
       const collectedAt = nowIso();
       nextSpec = updateTask(nextSpec, report.task.id, {
         collectedAt,
@@ -984,6 +1365,7 @@ async function collect(flags) {
 
 async function collectSummary(config, notionUrl, spec, taskFilter = undefined, options = {}) {
   const coveredByCollected = collectedOverlayTaskIds(spec);
+  const projectRelativePath = normalizeProjectSubdir(spec.repoContext?.projectRelativePath || spec._program?.projectRelativePath);
   const tasks = (spec.tasks || [])
     .filter((task) => task.status === "completed")
     .filter((task) => !taskFilter || task.id === taskFilter)
@@ -992,7 +1374,7 @@ async function collectSummary(config, notionUrl, spec, taskFilter = undefined, o
   const reports = [];
   for (const task of tasks) {
     if (options.skipMissing && !(await pathExists(task.lastResult.worktree))) continue;
-    reports.push(await inspectCollectTask(task));
+    reports.push(await inspectCollectTask(task, projectRelativePath));
   }
   const overlaps = overlappingChangedFiles(reports);
   return {
@@ -1016,13 +1398,27 @@ function collectedOverlayTaskIds(spec) {
 async function cleanup(flags) {
   const config = await loadConfig();
   const notionUrl = requireFlag(flags, "ntn");
-  const spec = await loadSpec(config, notionUrl);
-  if (!spec) throw new Error("No local spec found. Run plan first.");
-
   const apply = flags.apply === true || flags.apply === "true";
   const force = flags.force === true || flags.force === "true";
   const deleteBranches = flags.branches === true || flags.branches === "true";
   const taskFilter = optionalString(flags, "task", undefined);
+
+  const program = await loadProgram(config, notionUrl);
+  if (program) {
+    let spec = await loadSpec(config, notionUrl);
+    if (!spec) {
+      console.log("No active spec found. Nothing to clean up.");
+      return;
+    }
+    return cleanupSpec({ spec, apply, force, deleteBranches, taskFilter });
+  }
+
+  let spec = await loadSpec(config, notionUrl);
+  if (!spec) throw new Error("No local spec found. Run plan first.");
+  return cleanupSpec({ spec, apply, force, deleteBranches, taskFilter });
+}
+
+async function cleanupSpec({ spec, apply, force, deleteBranches, taskFilter }) {
   const gitRoot = await resolveGitRoot(spec.project);
   const targets = cleanupTargets(spec, taskFilter);
 
@@ -1088,12 +1484,12 @@ async function canonicalPath(filePath) {
   }
 }
 
-async function inspectCollectTask(task) {
+async function inspectCollectTask(task, projectRelativePath = "") {
   const worktree = task.lastResult.worktree;
   if (!(await pathExists(worktree))) {
     throw new Error(`Worktree for ${task.id} does not exist: ${worktree}`);
   }
-  const changedFiles = await worktreeChangedFiles(worktree);
+  const changedFiles = await worktreeChangedFiles(worktree, task.lastResult.baseHead, projectRelativePath);
   for (const file of changedFiles) {
     if (isUnsafeRelativePath(file)) {
       throw new Error(`Refusing to collect unsafe path from ${task.id}: ${file}`);
@@ -1102,9 +1498,10 @@ async function inspectCollectTask(task) {
   return { task, worktree, changedFiles };
 }
 
-async function applyCollectReport({ report, projectRoot }) {
+async function applyCollectReport({ report, projectRoot, worktreeProjectDir }) {
+  const sourceDir = worktreeProjectDir || report.worktree;
   for (const file of report.changedFiles) {
-    await cp(path.join(report.worktree, file), path.join(projectRoot, file), { recursive: true });
+    await cp(path.join(sourceDir, file), path.join(projectRoot, file), { recursive: true });
   }
 }
 
@@ -1153,13 +1550,152 @@ function collectRecommendation(reports, overlaps) {
   return { task: report.task, reason };
 }
 
-async function worktreeChangedFiles(worktree) {
-  const output = await git(["-C", worktree, "status", "--short"]);
-  return output
+async function collectMissingFiles(worktreeProjectDir, projectRoot) {
+  return diffDirectoryFiles(worktreeProjectDir, projectRoot);
+}
+
+async function syncDirectorySnapshot(sourceDir, targetDir) {
+  const sourceFiles = await listDirectoryFiles(sourceDir);
+  const targetFiles = await listDirectoryFiles(targetDir);
+  const sourceSet = new Set(sourceFiles);
+  const touched = [];
+
+  for (const file of targetFiles) {
+    if (isUnsafeRelativePath(file) || sourceSet.has(file)) continue;
+    await rm(path.join(targetDir, file), { force: true });
+    touched.push(file);
+  }
+
+  for (const file of sourceFiles) {
+    if (isUnsafeRelativePath(file)) continue;
+    const sourcePath = path.join(sourceDir, file);
+    const targetPath = path.join(targetDir, file);
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    await cp(sourcePath, targetPath, { recursive: true });
+    touched.push(file);
+  }
+
+  return touched;
+}
+
+async function worktreeChangedFiles(worktree, baseHead = undefined, projectSubdir = "") {
+  projectSubdir = normalizeProjectSubdir(projectSubdir);
+  const worktreeProjectDir = projectSubdir ? path.join(worktree, projectSubdir) : worktree;
+  const mainProjectDir = await findMainProjectDir(worktree, projectSubdir);
+  if (!(await pathExists(worktreeProjectDir))) return [];
+
+  if (baseHead) {
+    try {
+      const output = await git(["-C", worktree, "diff", "--name-only", baseHead, "--", projectSubdir || "."]);
+      const committed = output.split("\n").filter((line) => line.trim());
+      const untracked = await worktreeUntrackedFiles(worktree, projectSubdir);
+      const gitDetected = [...new Set([...committed, ...untracked])].map((f) => (projectSubdir ? f.slice(projectSubdir.length + 1) : f)).filter(Boolean);
+      if (gitDetected.length) return gitDetected;
+    } catch {
+      // fall through
+    }
+  }
+
+  const output = await git(["-C", worktree, "status", "--short", "--", projectSubdir || "."]);
+  const gitStatus = output
     .split("\n")
     .filter((line) => line.trim())
     .map((line) => line.slice(3).split(" -> ").pop())
+    .filter(Boolean)
+    .map((f) => (projectSubdir ? f.slice(projectSubdir.length + 1) : f))
     .filter(Boolean);
+  if (gitStatus.length) return gitStatus;
+
+  if (mainProjectDir && (await pathExists(mainProjectDir))) {
+    return diffDirectoryFiles(worktreeProjectDir, mainProjectDir);
+  }
+
+  return worktreeAddedFiles(worktreeProjectDir);
+}
+
+function normalizeProjectSubdir(value) {
+  const normalized = String(value || "").trim();
+  return normalized === "." ? "" : normalized;
+}
+
+async function findMainProjectDir(worktree, projectSubdir) {
+  if (!projectSubdir) return undefined;
+  const gitRoot = await resolveGitRoot(worktree);
+  return path.join(gitRoot, projectSubdir);
+}
+
+async function diffDirectoryFiles(sourceDir, targetDir) {
+  const { readFile } = await import("node:fs/promises");
+  const sourceFiles = await listDirectoryFiles(sourceDir);
+  const result = [];
+  for (const file of sourceFiles) {
+    if (isUnsafeRelativePath(file)) continue;
+    const targetPath = path.join(targetDir, file);
+    if (!(await pathExists(targetPath))) {
+      result.push(file);
+      continue;
+    }
+    const sourcePath = path.join(sourceDir, file);
+    const [sourceContent, targetContent] = await Promise.all([
+      readFile(sourcePath),
+      readFile(targetPath)
+    ]);
+    if (!sourceContent.equals(targetContent)) {
+      result.push(file);
+    }
+  }
+  return result;
+}
+
+async function listDirectoryFiles(dir) {
+  const { readdir } = await import("node:fs/promises");
+  const skipDirs = new Set(["node_modules", ".git", ".build_fast", ".firecrawl"]);
+  const results = [];
+  async function walk(currentDir, relativeTo) {
+    let entries;
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const name = entry.name;
+      if (skipDirs.has(name)) continue;
+      const fullPath = path.join(currentDir, name);
+      const relative = path.join(relativeTo, name);
+      if (entry.isDirectory()) {
+        await walk(fullPath, relative);
+      } else if (entry.isFile()) {
+        results.push(relative);
+      }
+    }
+  }
+  await walk(dir, "");
+  return results;
+}
+
+async function worktreeAddedFiles(worktreeProjectDir) {
+  try {
+    const output = await git(["-C", worktreeProjectDir, "status", "--short"]);
+    return output
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => line.slice(3).split(" -> ").pop())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function worktreeUntrackedFiles(worktree, projectSubdir = "") {
+  try {
+    const args = ["-C", worktree, "ls-files", "--others", "--exclude-standard"];
+    if (projectSubdir) args.push("--", projectSubdir);
+    const output = await git(args);
+    return output.split("\n").filter((line) => line.trim());
+  } catch {
+    return [];
+  }
 }
 
 function isUnsafeRelativePath(filePath) {
