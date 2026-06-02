@@ -62,13 +62,32 @@ const profile = browserQaProfile({
     requiredText: ["Orbit Notes"],
     requiredSelectors: ["#app", ".hero"],
     requiredAssets: true,
-    requiredModules: ["/demo/app.js"]
+    requiredModules: ["/demo/app.js"],
+    interactions: [
+      {
+        name: "create note",
+        steps: [
+          { action: "fill", selector: "#note-title", value: "Launch plan" },
+          { action: "click", selector: "button[type='submit']" },
+          { action: "expectText", text: "Launch plan" }
+        ]
+      }
+    ]
   }
 });
 
 assert.equal(profile.startCommand, "npm run preview");
 assert.equal(profile.url, "http://127.0.0.1:${PORT}/demo/");
 assert.deepEqual(profile.requiredSelectors, ["#app", ".hero"]);
+assert.equal(profile.render, true);
+assert.deepEqual(profile.interactions[0], {
+  name: "create note",
+  steps: [
+    { action: "fill", selector: "#note-title", value: "Launch plan", text: "", timeout: 2000 },
+    { action: "click", selector: "button[type='submit']", value: "", text: "", timeout: 2000 },
+    { action: "expectText", selector: "", value: "", text: "Launch plan", timeout: 2000 }
+  ]
+});
 
 const profileChecks = await browserQaHtmlChecks(`
 <!doctype html>

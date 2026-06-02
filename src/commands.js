@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { cp, mkdir, rm, realpath } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import os from "node:os";
@@ -1043,7 +1044,8 @@ async function writeBrowserQaArtifact(config, notionUrl, result, failed) {
     failed,
     checks: result.checks,
     profile: result.profile,
-    html: result.html || ""
+    html: result.html || "",
+    screenshotBase64: result.screenshotBase64 || ""
   });
   return artifactPath;
 }
@@ -2757,6 +2759,7 @@ async function runBrowserQa(target, flags = {}) {
   });
   let output = "";
   let html = "";
+  let screenshotBase64 = "";
   child.stdout.on("data", (chunk) => { output += chunk.toString(); });
   child.stderr.on("data", (chunk) => { output += chunk.toString(); });
 
@@ -2769,6 +2772,13 @@ async function runBrowserQa(target, flags = {}) {
     html = await htmlResponse.text();
     checks.push({ name: "index.html", ok: htmlResponse.ok && /<!doctype html/i.test(html), detail: `${htmlResponse.status} ${htmlResponse.headers.get("content-type") || ""}` });
     checks.push(...await browserQaHtmlChecks(html, url, profile));
+    if (profile.render !== false || flags["require-playwright"]) {
+      const rendered = await runPlaywrightBrowserQa(url, profile, flags, projectDir);
+      checks.push(...rendered.checks);
+      if (rendered.console.length) checks.push({ name: "browser console", ok: false, detail: rendered.console.join(" | ") });
+      if (rendered.pageErrors.length) checks.push({ name: "browser page errors", ok: false, detail: rendered.pageErrors.join(" | ") });
+      if (rendered.screenshotBase64) screenshotBase64 = rendered.screenshotBase64;
+    }
   } catch (error) {
     checks.push({ name: "browser QA runtime", ok: false, detail: error.message || String(error) });
   } finally {
@@ -2779,7 +2789,7 @@ async function runBrowserQa(target, flags = {}) {
     checks.push({ name: "server output", ok: true, detail: firstOutputLine(output) });
   }
 
-  return { url, profile, html, checks };
+  return { url, profile, html, screenshotBase64, checks };
 }
 
 export function browserQaProfile(target = {}, flags = {}) {
@@ -2792,7 +2802,9 @@ export function browserQaProfile(target = {}, flags = {}) {
     requiredSelectors: ["#note-title", "#note-body", "#note-tags", "#create-form", "#search-input", "#tag-filter", "#notes-list"],
     requiredAssets: true,
     requiredModules: ["/src/orbit-notes.js", "/demo/app.js"],
-    manualChecks: []
+    manualChecks: [],
+    render: true,
+    interactions: []
   };
 }
 
@@ -2805,7 +2817,33 @@ function normalizeRuntimeBrowserQa(value) {
     requiredSelectors: toStringList(value.requiredSelectors || value.required_selectors),
     requiredAssets: value.requiredAssets !== false && value.required_assets !== false,
     requiredModules: toStringList(value.requiredModules || value.required_modules),
-    manualChecks: toStringList(value.manualChecks || value.manual_checks)
+    manualChecks: toStringList(value.manualChecks || value.manual_checks),
+    render: value.render !== false && value.playwright !== false,
+    interactions: normalizeBrowserInteractions(value.interactions || value.interactionChecks || value.interaction_checks)
+  };
+}
+
+function normalizeBrowserInteractions(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((interaction, index) => {
+    if (!interaction || typeof interaction !== "object") return null;
+    return {
+      name: String(interaction.name || `interaction ${index + 1}`).trim(),
+      steps: Array.isArray(interaction.steps) ? interaction.steps.map(normalizeBrowserInteractionStep).filter(Boolean) : []
+    };
+  }).filter((interaction) => interaction && interaction.steps.length);
+}
+
+function normalizeBrowserInteractionStep(step) {
+  if (!step || typeof step !== "object") return null;
+  const action = String(step.action || "").trim();
+  if (!action) return null;
+  return {
+    action,
+    selector: step.selector ? String(step.selector).trim() : "",
+    value: step.value === undefined ? "" : String(step.value),
+    text: step.text === undefined ? "" : String(step.text),
+    timeout: Number(step.timeout || 2000)
   };
 }
 
@@ -2826,6 +2864,84 @@ export async function browserQaHtmlChecks(html, url, profile, fetchImpl = fetch)
     checks.push(...await checkHtmlAssets(html, url, fetchImpl));
   }
   return checks;
+}
+
+async function runPlaywrightBrowserQa(url, profile, flags = {}, projectDir = process.cwd()) {
+  const requirePlaywright = flags["require-playwright"] === true || flags["require-playwright"] === "true";
+  let playwright;
+  try {
+    playwright = createRequire(path.join(projectDir, "package.json"))("playwright");
+  } catch {
+    return {
+      checks: [{ name: "playwright render", ok: !requirePlaywright, detail: requirePlaywright ? "playwright is not installed" : "skipped; playwright is not installed" }],
+      console: [],
+      pageErrors: [],
+      screenshotBase64: ""
+    };
+  }
+
+  const browser = await playwright.chromium.launch({ headless: true });
+  const consoleErrors = [];
+  const pageErrors = [];
+  let screenshotBase64 = "";
+  const checks = [];
+  try {
+    const page = await browser.newPage({ viewport: { width: 1365, height: 768 } });
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(`${message.type()}: ${message.text()}`);
+    });
+    page.on("pageerror", (error) => pageErrors.push(error.message || String(error)));
+
+    await page.goto(url, { waitUntil: "networkidle", timeout: 10000 });
+    checks.push({ name: "playwright render", ok: true, detail: "page loaded" });
+
+    for (const selector of profile.requiredSelectors || []) {
+      const count = await page.locator(selector).count();
+      checks.push({ name: `rendered selector ${selector}`, ok: count > 0, detail: `${count} match${count === 1 ? "" : "es"}` });
+    }
+
+    for (const text of profile.requiredText || []) {
+      const count = await page.getByText(text, { exact: false }).count();
+      checks.push({ name: `rendered text ${text}`, ok: count > 0, detail: `${count} match${count === 1 ? "" : "es"}` });
+    }
+
+    for (const interaction of profile.interactions || []) {
+      const result = await runBrowserInteraction(page, interaction);
+      checks.push(result);
+    }
+
+    if (checks.some((check) => !check.ok) || consoleErrors.length || pageErrors.length) {
+      screenshotBase64 = await page.screenshot({ fullPage: true, type: "png", encoding: "base64" });
+    }
+  } catch (error) {
+    checks.push({ name: "playwright render", ok: false, detail: error.message || String(error) });
+  } finally {
+    await browser.close();
+  }
+  return { checks, console: consoleErrors, pageErrors, screenshotBase64 };
+}
+
+async function runBrowserInteraction(page, interaction) {
+  try {
+    for (const step of interaction.steps) {
+      if (step.action === "fill") {
+        await page.locator(step.selector).fill(step.value, { timeout: step.timeout });
+      } else if (step.action === "click") {
+        await page.locator(step.selector).click({ timeout: step.timeout });
+      } else if (step.action === "expectText") {
+        const count = await page.getByText(step.text || step.value, { exact: false }).count();
+        if (!count) throw new Error(`missing text: ${step.text || step.value}`);
+      } else if (step.action === "expectSelector") {
+        const count = await page.locator(step.selector).count();
+        if (!count) throw new Error(`missing selector: ${step.selector}`);
+      } else {
+        throw new Error(`unsupported action: ${step.action}`);
+      }
+    }
+    return { name: `interaction ${interaction.name}`, ok: true, detail: `${interaction.steps.length} steps passed` };
+  } catch (error) {
+    return { name: `interaction ${interaction.name}`, ok: false, detail: error.message || String(error) };
+  }
 }
 
 async function checkServedJavaScriptModule(modulePath, baseUrl, fetchImpl = fetch) {

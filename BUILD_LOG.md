@@ -568,3 +568,14 @@ Tightened the end-of-drive QA loop:
 - In `junior_mode` and `boss_mode`, `drive --qa browser` creates bug tasks, runs one automatic fresh-worker repair cycle by default, applies safe repair output, reruns feedback checks, and reruns browser QA.
 - `--max-qa-repairs <n>` controls the bounded repair loop; `0` keeps the older create-task-and-stop behavior.
 - Standalone `qa --type browser` also writes artifacts when failures occur.
+
+### Step 40: Optional Playwright Browser QA
+
+Added an optional rendered browser QA layer:
+
+- `qa --type browser` and `drive --qa browser` still run the dependency-free fetch/asset checks first.
+- If `playwright` is installed, QA launches Chromium, loads the demo URL, checks rendered selectors/text, records console errors and page errors, and runs configured interaction steps.
+- `--require-playwright` makes missing Playwright a failure; otherwise rendered QA is skipped cleanly when the dependency is unavailable.
+- Browser QA profiles now preserve `render` and `interactions`.
+- Supported interaction actions are `fill`, `click`, `expectText`, and `expectSelector`.
+- Failed rendered checks can include a base64 PNG screenshot in the QA artifact.

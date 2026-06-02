@@ -272,6 +272,7 @@ The QA command starts the demo, waits for the page, fetches the HTML, and checks
 - a module script for the browser app
 - served core and app JavaScript modules
 - linked stylesheet/script assets resolved from the served page URL, with `200` responses and CSS/JavaScript MIME types
+- rendered Chromium checks when `playwright` is installed, including console/page errors, rendered selector/text checks, and configured interaction steps
 
 Plans can include a `browserQa` profile to make these checks project-specific:
 
@@ -283,11 +284,24 @@ Plans can include a `browserQa` profile to make these checks project-specific:
   "requiredSelectors": ["#create-form", "#notes-list"],
   "requiredAssets": true,
   "requiredModules": ["/demo/app.js"],
-  "manualChecks": ["Create a note", "Search by text", "Filter by tag"]
+  "manualChecks": ["Create a note", "Search by text", "Filter by tag"],
+  "render": true,
+  "interactions": [
+    {
+      "name": "create note",
+      "steps": [
+        { "action": "fill", "selector": "#note-title", "value": "Launch plan" },
+        { "action": "click", "selector": "button[type='submit']" },
+        { "action": "expectText", "text": "Launch plan" }
+      ]
+    }
+  ]
 }
 ```
 
 When no profile exists, `qa --type browser` falls back to the Orbit Notes fixture anchors so older local tests still work.
+
+Use `--require-playwright` when rendered QA must fail instead of skip if Playwright is not installed.
 
 If checks fail, bugs are logged locally:
 

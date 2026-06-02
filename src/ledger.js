@@ -162,10 +162,35 @@ function normalizeBrowserQa(value) {
   const requiredSelectors = normalizeStringArray(value.requiredSelectors || value.required_selectors);
   const requiredModules = normalizeStringArray(value.requiredModules || value.required_modules);
   const manualChecks = normalizeStringArray(value.manualChecks || value.manual_checks);
+  const interactions = normalizeBrowserInteractions(value.interactions || value.interactionChecks || value.interaction_checks);
   const url = String(value.url || "http://127.0.0.1:${PORT}/").trim();
   const requiredAssets = value.requiredAssets !== false && value.required_assets !== false;
-  if (!startCommand && !requiredText.length && !requiredSelectors.length && !requiredModules.length) return undefined;
-  return { startCommand, url, requiredText, requiredSelectors, requiredAssets, requiredModules, manualChecks };
+  const render = value.render !== false && value.playwright !== false;
+  if (!startCommand && !requiredText.length && !requiredSelectors.length && !requiredModules.length && !interactions.length) return undefined;
+  return { startCommand, url, requiredText, requiredSelectors, requiredAssets, requiredModules, manualChecks, render, interactions };
+}
+
+function normalizeBrowserInteractions(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((interaction, index) => {
+    if (!interaction || typeof interaction !== "object") return null;
+    const steps = Array.isArray(interaction.steps)
+      ? interaction.steps.map((step) => {
+        if (!step || typeof step !== "object") return null;
+        const action = String(step.action || "").trim();
+        if (!action) return null;
+        return {
+          action,
+          selector: step.selector ? String(step.selector).trim() : "",
+          value: step.value === undefined ? "" : String(step.value),
+          text: step.text === undefined ? "" : String(step.text),
+          timeout: Number(step.timeout || 2000)
+        };
+      }).filter(Boolean)
+      : [];
+    if (!steps.length) return null;
+    return { name: String(interaction.name || `interaction ${index + 1}`).trim(), steps };
+  }).filter(Boolean);
 }
 
 export async function saveProgram(config, notionUrl, program, cwd = process.cwd()) {

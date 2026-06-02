@@ -139,7 +139,7 @@ For one-command QA-to-task creation:
 node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
 ```
 
-Browser QA fetches the served HTML, verifies expected UI anchors, resolves linked stylesheets/scripts the same way a browser does, and checks those assets return `200` with CSS/JavaScript MIME types. This catches broken paths like a page served at `/` linking to `./styles.css` when the stylesheet actually lives under `/demo/styles.css`.
+Browser QA fetches the served HTML, verifies expected UI anchors, resolves linked stylesheets/scripts the same way a browser does, and checks those assets return `200` with CSS/JavaScript MIME types. This catches broken paths like a page served at `/` linking to `./styles.css` when the stylesheet actually lives under `/demo/styles.css`. If `playwright` is installed in the project, QA also renders the page in Chromium, checks for console/page errors, verifies rendered selectors/text, and can run configured interaction steps. Use `--require-playwright` when rendered QA must be enforced instead of skipped.
 
 Run browser QA automatically at the end of `drive`:
 
@@ -160,7 +160,18 @@ Specs can define a browser QA profile so the checks are project-specific instead
     "requiredSelectors": ["#create-form", "#notes-list"],
     "requiredAssets": true,
     "requiredModules": ["/demo/app.js"],
-    "manualChecks": ["Create a note", "Search by text", "Filter by tag"]
+    "manualChecks": ["Create a note", "Search by text", "Filter by tag"],
+    "render": true,
+    "interactions": [
+      {
+        "name": "create note",
+        "steps": [
+          { "action": "fill", "selector": "#note-title", "value": "Launch plan" },
+          { "action": "click", "selector": "button[type='submit']" },
+          { "action": "expectText", "text": "Launch plan" }
+        ]
+      }
+    ]
   }
 }
 ```

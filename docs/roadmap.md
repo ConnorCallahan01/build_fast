@@ -35,8 +35,9 @@
 - Add structured browser QA for static demo apps. MVP added.
 - Add project/spec-specific browser QA profiles. MVP added.
 - Capture failure artifacts for failed UI checks. MVP JSON artifacts added.
-- Capture screenshots and richer DOM snapshots for failed UI checks.
-- Add Playwright-backed interaction checks when dependencies are available.
+- Add Playwright-backed render and interaction checks when dependencies are available. MVP added.
+- Capture screenshots for failed rendered UI checks. MVP base64 artifact capture added.
+- Capture richer DOM snapshots for failed UI checks.
 
 ### Better Collection
 

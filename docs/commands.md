@@ -174,7 +174,7 @@ node bin/build_fast.js drive --ntn "$NTN" --qa browser
 
 When final QA fails, `drive` logs bugs, writes a JSON artifact, creates `[bug]` Spec Tasks, and syncs Notion. In `junior_mode` and `boss_mode`, it runs one automatic QA repair cycle by default, then reruns browser QA. In `intern_mode`, or with `--max-qa-repairs 0`, it stops after creating the bug tasks.
 
-The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types.
+The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types. If `playwright` is installed, QA also renders the page in Chromium, checks console/page errors, verifies rendered selectors/text, and runs configured interaction steps. Add `--require-playwright` to fail when Playwright is unavailable.
 
 When a spec or program has `browserQa`, QA uses that profile:
 
@@ -186,7 +186,18 @@ When a spec or program has `browserQa`, QA uses that profile:
   "requiredSelectors": ["#app", ".hero"],
   "requiredAssets": true,
   "requiredModules": ["/demo/app.js"],
-  "manualChecks": ["Create an item", "Filter the list"]
+  "manualChecks": ["Create an item", "Filter the list"],
+  "render": true,
+  "interactions": [
+    {
+      "name": "create item",
+      "steps": [
+        { "action": "fill", "selector": "#title", "value": "Launch plan" },
+        { "action": "click", "selector": "button[type='submit']" },
+        { "action": "expectText", "text": "Launch plan" }
+      ]
+    }
+  ]
 }
 ```
 
