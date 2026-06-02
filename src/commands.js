@@ -621,6 +621,12 @@ async function drive(flags) {
       for (const overlap of collection.overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
     }
     if (parallel === "smart" && collection.overlaps.length) {
+      const completedIntegration = completedIntegrationReport(collection);
+      if (completedIntegration) {
+        console.log(`Drive applying completed integration task ${completedIntegration.task.id}: it already resolves overlapping parallel outputs`);
+        await collect({ ntn: notionUrl, task: completedIntegration.task.id, apply: true });
+        return;
+      }
       const integrated = addParallelIntegrationTask(spec, collection);
       if (integrated) {
         await saveSpec(config, notionUrl, integrated);
@@ -740,19 +746,29 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
     const collection = await collectSummary(config, notionUrl, completedSpec, undefined, { uncollectedOnly: true, skipMissing: true });
     if (collection.reports.length) {
       if (optionalString(flags, "parallel", "default") === "smart" && collection.overlaps.length) {
-        const integrated = addParallelIntegrationTask(completedSpec, collection);
-        if (integrated) {
-          await saveSpec(config, notionUrl, integrated);
-          console.log(`Created ${integrated.tasks.at(-1).id} to integrate overlapping parallel outputs for ${nextSpec.id}. Continuing.`);
-          continue;
+        const completedIntegration = completedIntegrationReport(collection);
+        if (completedIntegration) {
+          console.log(`Drive applying completed integration task ${completedIntegration.task.id}: it already resolves overlapping parallel outputs`);
+        } else {
+          const integrated = addParallelIntegrationTask(completedSpec, collection);
+          if (integrated) {
+            await saveSpec(config, notionUrl, integrated);
+            console.log(`Created ${integrated.tasks.at(-1).id} to integrate overlapping parallel outputs for ${nextSpec.id}. Continuing.`);
+            continue;
+          }
         }
       }
       const projectRoot = completedSpec.project;
       const projectSubdir = normalizeProjectSubdir(completedSpec.repoContext?.projectRelativePath);
-      const reportsToApply = collection.overlaps.length && collection.recommendation
-        ? collection.reports.filter((report) => report.task.id === collection.recommendation.task.id)
-        : collection.reports;
-      if (collection.overlaps.length && collection.recommendation) {
+      const integrationReport = completedIntegrationReport(collection);
+      const reportsToApply = integrationReport
+        ? [integrationReport]
+        : collection.overlaps.length && collection.recommendation
+          ? collection.reports.filter((report) => report.task.id === collection.recommendation.task.id)
+          : collection.reports;
+      if (integrationReport) {
+        console.log(`Drive applying integration task ${integrationReport.task.id}: completed integration output is canonical`);
+      } else if (collection.overlaps.length && collection.recommendation) {
         console.log(`Drive applying recommended integration task ${collection.recommendation.task.id}: ${collection.recommendation.reason}`);
       }
       const orderedReports = [...reportsToApply].sort((a, b) => (a.task.order || 0) - (b.task.order || 0));
@@ -954,6 +970,8 @@ function programComplete(program) {
 function shouldDriveApply(autopilot, collection) {
   if (!collection.reports.length) return { apply: false, reason: "no completed worktree-backed tasks found" };
   if (autopilot === "intern_mode") return { apply: false, reason: "intern_mode requires manual collection apply" };
+  const integrationReport = completedIntegrationReport(collection);
+  if (integrationReport) return { apply: true, taskId: integrationReport.task.id, reason: "completed integration output is canonical" };
   if (!collection.overlaps.length) {
     const latest = [...collection.reports].sort((a, b) => (b.task.order || 0) - (a.task.order || 0))[0];
     return { apply: true, taskId: latest.task.id, reason: "latest completed task output has no overlapping file conflicts" };
@@ -964,8 +982,16 @@ function shouldDriveApply(autopilot, collection) {
   return { apply: false, reason: "overlapping task outputs need manual choice" };
 }
 
+export function completedIntegrationReport(collection) {
+  const reports = collection?.reports || [];
+  const integrations = reports.filter((report) => report.task.kind === "parallel_integration" && report.task.status === "completed");
+  if (!integrations.length) return null;
+  return [...integrations].sort((a, b) => (b.task.order || 0) - (a.task.order || 0))[0];
+}
+
 export function addParallelIntegrationTask(spec, collection) {
   if ((spec.tasks || []).some((task) => task.kind === "parallel_integration" && task.status !== "completed")) return null;
+  if (completedIntegrationReport(collection)) return null;
   const reportsById = new Map(collection.reports.map((report) => [report.task.id, report]));
   const dependencyIds = [...new Set(collection.overlaps.flatMap((overlap) => overlap.taskIds))].filter((taskId) => reportsById.has(taskId));
   if (!dependencyIds.length) return null;

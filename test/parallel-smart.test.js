@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { addParallelIntegrationTask, analyzeSmartParallelSelection, selectSwarmCandidates } from "../src/commands.js";
+import { addParallelIntegrationTask, analyzeSmartParallelSelection, completedIntegrationReport, selectSwarmCandidates } from "../src/commands.js";
 
 const baseTask = {
   status: "pending",
@@ -84,5 +84,26 @@ assert.equal(integrated.tasks.length, 3);
 assert.equal(integrated.tasks[2].kind, "parallel_integration");
 assert.deepEqual(integrated.tasks[2].dependencies, ["task-001", "task-002"]);
 assert.deepEqual(integrated.tasks[2].expectedFiles, ["src/app.js"]);
+
+const completedIntegrationCollection = {
+  reports: [
+    { task: { id: "task-001", order: 1, status: "completed" }, changedFiles: ["src/app.js"] },
+    { task: { id: "task-002", order: 2, status: "completed" }, changedFiles: ["src/app.js"] },
+    { task: { id: "task-003", order: 3, status: "completed", kind: "parallel_integration" }, changedFiles: ["src/app.js"] }
+  ],
+  overlaps: [
+    { file: "src/app.js", taskIds: ["task-001", "task-002", "task-003"] }
+  ]
+};
+
+assert.equal(completedIntegrationReport(completedIntegrationCollection).task.id, "task-003");
+assert.equal(addParallelIntegrationTask({
+  feedbackLoops: ["npm test"],
+  tasks: [
+    { ...baseTask, id: "task-001", order: 1, title: "A", status: "completed" },
+    { ...baseTask, id: "task-002", order: 2, title: "B", status: "completed" },
+    { ...baseTask, id: "task-003", order: 3, title: "Integrate", status: "completed", kind: "parallel_integration" }
+  ]
+}, completedIntegrationCollection), null);
 
 console.log("parallel smart tests passed");
