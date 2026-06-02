@@ -642,3 +642,13 @@ Prompt changes:
 - `parallelGroup` guidance now frames group names as human-readable hints; only `"serial"` should force one-at-a-time execution.
 - Multi-spec planning now warns against making every spec depend on the previous spec.
 - Added prompt contract coverage so these parallel-planning instructions do not disappear in later edits.
+
+### Step 47: Drive Progress Output
+
+Improved terminal transparency for long autonomous runs:
+
+- Added a dependency-free terminal formatter with optional TTY colors, section headers, step lines, OK/ERR/WARN labels, durations, and wrapped worker summaries.
+- Program `drive` now announces spec preparation, swarm launch, collection inspection, apply decisions, feedback checks, local state saves, and timed Notion syncs.
+- Smart-parallel selection now prints selected/deferred tasks in a more scannable format.
+- Swarm task summaries are wrapped over multiple lines instead of one long paragraph.
+- Added terminal formatting regression coverage.

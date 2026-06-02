@@ -11,6 +11,7 @@ import { makeSpec, loadSpec, saveSpec, specDir, createRun, finishRun, savePrompt
 import { checkNotionPage, inspectNotionPage, markdownBlocks, NotionClient, parseNotionId, pageTitle, notionRelation, notionRichText, notionStatus, notionTitle, notionUrl } from "./notion.js";
 import { renderPrompt } from "./prompts.js";
 import { scanRepo } from "./repo-scan.js";
+import * as term from "./terminal.js";
 import { normalizeProject, nowIso, optionalString, pathExists, printHelp, readJson, requireFlag, writeJson } from "./util.js";
 
 const execFileAsync = promisify(execFile);
@@ -592,7 +593,7 @@ async function drive(flags) {
   }
 
   enforcePlanQuality(spec, flags);
-  await sync({ ntn: notionUrl });
+  await term.timed("Syncing Notion spec state", () => sync({ ntn: notionUrl }));
   if (flags["no-agent"]) {
     console.log("Drive no-agent smoke complete after plan/sync.");
     return;
@@ -604,6 +605,7 @@ async function drive(flags) {
     spec = await loadSpec(config, notionUrl);
     const pending = readyPendingTasks(spec);
     if (!pending.length) break;
+    term.step(`Launching swarm batch ${iterations + 1}`);
     await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks, parallel });
     iterations += 1;
   }
@@ -613,6 +615,7 @@ async function drive(flags) {
     throw new Error(`Drive stopped after ${maxIterations} swarm iterations with pending tasks remaining.`);
   }
 
+  term.step("Inspecting completed worktree output");
   const collection = await collectSummary(config, notionUrl, spec, undefined, { uncollectedOnly: true, skipMissing: true });
   if (collection.reports.length) {
     printCollectReports(collection.reports, false);
@@ -623,7 +626,7 @@ async function drive(flags) {
     if (parallel === "smart" && collection.overlaps.length) {
       const completedIntegration = completedIntegrationReport(collection);
       if (completedIntegration) {
-        console.log(`Drive applying completed integration task ${completedIntegration.task.id}: it already resolves overlapping parallel outputs`);
+        term.info(`Applying completed integration task ${completedIntegration.task.id}`, "it already resolves overlapping parallel outputs");
         await collect({ ntn: notionUrl, task: completedIntegration.task.id, apply: true });
         return;
       }
@@ -638,20 +641,21 @@ async function drive(flags) {
 
     const shouldApply = shouldDriveApply(autopilot, collection);
     if (shouldApply.apply) {
-      console.log(`Drive applying ${shouldApply.taskId}: ${shouldApply.reason}`);
+      term.info(`Applying ${shouldApply.taskId}`, shouldApply.reason);
       await collect({ ntn: notionUrl, task: shouldApply.taskId, apply: true });
     } else {
-      console.log(`Drive stopped before collection apply: ${shouldApply.reason}`);
+      term.warn("Drive stopped before collection apply", shouldApply.reason);
       return;
     }
   } else {
-    console.log("No uncollected worktree output found. Continuing to feedback checks.");
+    term.info("Collection", "no uncollected worktree output found");
   }
 
   const refreshed = await loadSpec(config, notionUrl);
+  term.step("Running feedback checks");
   const checks = await runFeedbackLoops(refreshed);
   for (const check of checks) {
-    console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
+    term.check(check.ok, check.command, check.detail);
   }
   if (checks.some((check) => !check.ok)) {
     const repaired = await addFeedbackBugAndRepair(config, notionUrl, refreshed, checks, flags);
@@ -666,8 +670,8 @@ async function drive(flags) {
 
   if (await runDriveQaFinalPass({ config, notionUrl, target: refreshed, flags, autopilot, permissionProfile, concurrency, maxTasks })) return;
 
-  await sync({ ntn: notionUrl });
-  console.log("Drive complete.");
+  await term.timed("Syncing Notion spec state", () => sync({ ntn: notionUrl }));
+  term.success("Drive complete");
 }
 
 async function driveProgram({ config, notionUrl, goal, type, goalContract, flags, autopilot, permissionProfile, concurrency, maxTasks }) {
@@ -692,7 +696,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
 
   enforcePlanQuality(program, flags);
   const completedAtStart = programComplete(program);
-  if (!completedAtStart) await syncProgram({ config, notionUrl, program });
+  if (!completedAtStart) await term.timed("Syncing Notion program state", () => syncProgram({ config, notionUrl, program }));
   if (flags["no-agent"]) {
     console.log("Drive no-agent smoke complete after plan/sync.");
     return;
@@ -706,13 +710,14 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
     if (!ready.length) break;
 
     const nextSpec = ready[0];
-    console.log(`\nDrive: ${nextSpec.id} ${nextSpec.title}`);
+    term.heading("Drive spec", `${nextSpec.id} ${nextSpec.title}`);
 
     const existingSpec = await loadSpec(config, notionUrl);
     const isResumable = existingSpec
       && existingSpec._program?.specId === nextSpec.id
       && (nextSpec.status === "in_progress" || (readyPendingTasks(existingSpec).length === 0 && await specFilesCollectable(existingSpec)));
     if (!isResumable) {
+      term.step(`Preparing active spec ${nextSpec.id}`);
       const standalone = programToStandaloneSpec(program, nextSpec);
       const repoContext = await scanRepo(program.project);
       standalone.repoContext = {
@@ -725,7 +730,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       program = updateProgramSpec(await loadProgram(config, notionUrl), nextSpec.id, { status: "in_progress" });
       await saveProgram(config, notionUrl, program);
     } else {
-      console.log(`Resuming ${nextSpec.id} from previous run (${existingSpec.tasks.filter(t => t.status === 'completed').length}/${existingSpec.tasks.length} tasks done)`);
+      term.info(`Resuming ${nextSpec.id}`, `${existingSpec.tasks.filter(t => t.status === 'completed').length}/${existingSpec.tasks.length} tasks done`);
     }
 
     let specIterations = 0;
@@ -734,6 +739,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       let currentSpec = await loadSpec(config, notionUrl);
       const pending = readyPendingTasks(currentSpec);
       if (!pending.length) break;
+      term.step(`Launching swarm batch ${specIterations + 1} for ${nextSpec.id}`);
       await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks, parallel: optionalString(flags, "parallel", "default") });
       specIterations += 1;
     }
@@ -743,17 +749,18 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       throw new Error(`Drive stopped: ${nextSpec.id} has pending tasks after ${maxSpecIterations} swarm iterations.`);
     }
 
+    term.step(`Inspecting completed worktree output for ${nextSpec.id}`);
     const collection = await collectSummary(config, notionUrl, completedSpec, undefined, { uncollectedOnly: true, skipMissing: true });
     if (collection.reports.length) {
       if (optionalString(flags, "parallel", "default") === "smart" && collection.overlaps.length) {
         const completedIntegration = completedIntegrationReport(collection);
         if (completedIntegration) {
-          console.log(`Drive applying completed integration task ${completedIntegration.task.id}: it already resolves overlapping parallel outputs`);
+          term.info(`Applying completed integration task ${completedIntegration.task.id}`, "it already resolves overlapping parallel outputs");
         } else {
           const integrated = addParallelIntegrationTask(completedSpec, collection);
           if (integrated) {
             await saveSpec(config, notionUrl, integrated);
-            console.log(`Created ${integrated.tasks.at(-1).id} to integrate overlapping parallel outputs for ${nextSpec.id}. Continuing.`);
+            term.warn(`Created ${integrated.tasks.at(-1).id}`, `integrates overlapping parallel outputs for ${nextSpec.id}; continuing`);
             continue;
           }
         }
@@ -767,26 +774,26 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
           ? collection.reports.filter((report) => report.task.id === collection.recommendation.task.id)
           : collection.reports;
       if (integrationReport) {
-        console.log(`Drive applying integration task ${integrationReport.task.id}: completed integration output is canonical`);
+        term.info(`Applying integration task ${integrationReport.task.id}`, "completed integration output is canonical");
       } else if (collection.overlaps.length && collection.recommendation) {
-        console.log(`Drive applying recommended integration task ${collection.recommendation.task.id}: ${collection.recommendation.reason}`);
+        term.info(`Applying recommended integration task ${collection.recommendation.task.id}`, collection.recommendation.reason);
       }
       const orderedReports = [...reportsToApply].sort((a, b) => (a.task.order || 0) - (b.task.order || 0));
       for (const report of orderedReports) {
         const worktreeProjectDir = projectSubdir ? path.join(report.worktree, projectSubdir) : report.worktree;
         if (report.changedFiles.length) {
-          console.log(`Drive applying ${report.task.id} (${report.changedFiles.length} files): ${report.task.title}`);
+          term.success(`Applying ${report.task.id}`, `${report.changedFiles.length} file${report.changedFiles.length === 1 ? "" : "s"} - ${report.task.title}`);
           await applyCollectReport({ report, projectRoot, worktreeProjectDir });
         } else {
           const missingFiles = await collectMissingFiles(worktreeProjectDir, projectRoot);
           if (missingFiles.length) {
-            console.log(`Drive applying ${report.task.id} (${missingFiles.length} missing files): ${report.task.title}`);
+            term.success(`Applying ${report.task.id}`, `${missingFiles.length} missing file${missingFiles.length === 1 ? "" : "s"} - ${report.task.title}`);
             for (const file of missingFiles) {
               await cp(path.join(worktreeProjectDir, file), path.join(projectRoot, file), { recursive: true });
             }
             report.changedFiles = missingFiles;
           } else {
-            console.log(`Drive skipping ${report.task.id} (no changed or missing files)`);
+            term.info(`Skipping ${report.task.id}`, "no changed or missing files");
           }
         }
         const collectedAt = nowIso();
@@ -796,18 +803,21 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
         }
       }
       await saveSpec(config, notionUrl, completedSpec);
+    } else {
+      term.info("Collection", "no uncollected worktree output found");
     }
 
     completedSpec = await loadSpec(config, notionUrl);
+    term.step(`Running feedback checks for ${nextSpec.id}`);
     const checks = await runFeedbackLoops(completedSpec);
     for (const check of checks) {
-      console.log(`${check.ok ? "OK " : "ERR"} ${check.command}: ${check.detail}`);
+      term.check(check.ok, check.command, check.detail);
     }
     if (checks.some((check) => !check.ok)) {
       const repaired = await addFeedbackBugAndRepair(config, notionUrl, completedSpec, checks, flags);
       if (repaired) {
         await saveSpec(config, notionUrl, repaired);
-        console.log(`Created ${repaired.tasks.at(-1).id} to repair failed feedback checks for ${nextSpec.id}. Continuing.`);
+        term.warn(`Created ${repaired.tasks.at(-1).id}`, `repairs failed feedback checks for ${nextSpec.id}; continuing`);
         continue;
       }
       throw new Error(`Drive feedback checks failed for ${nextSpec.id}.`);
@@ -824,10 +834,11 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       updatedAt: nowIso()
     };
     program = updateProgramSpec(program, nextSpec.id, updatedSpec);
+    term.step(`Saving completed state for ${nextSpec.id}`);
     await saveProgram(config, notionUrl, program);
 
-    await syncProgram({ config, notionUrl, program });
-    console.log(`Spec ${nextSpec.id} complete.`);
+    await term.timed("Syncing Notion program state", () => syncProgram({ config, notionUrl, program }));
+    term.success(`Spec ${nextSpec.id} complete`);
     iterations += 1;
   }
 
@@ -840,7 +851,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
   if (!completedAtStart && programComplete(program)) {
     program = { ...program, status: "completed", updatedAt: nowIso() };
     await saveProgram(config, notionUrl, program);
-    await syncProgram({ config, notionUrl, program });
+    await term.timed("Syncing final program state", () => syncProgram({ config, notionUrl, program }));
   }
 
   if (await runDriveQaFinalPass({ config, notionUrl, target: programToStandaloneSpec(program, program.specs.at(-1)), flags, autopilot, permissionProfile, concurrency, maxTasks })) return;
@@ -1392,9 +1403,9 @@ async function swarm(flags) {
   }
   await saveSpec(config, notionUrl, spec);
 
-  console.log(`Swarm starting ${assignments.length} task${assignments.length === 1 ? "" : "s"} with concurrency ${concurrency}.`);
+  term.heading("Swarm", `${assignments.length} task${assignments.length === 1 ? "" : "s"} with concurrency ${concurrency}`);
   if (parallelMode === "smart") {
-    console.log("Smart parallel selection:");
+    term.step("Smart parallel selection");
     printSmartParallelAnalysis({ ...smartAnalysis, selected: candidates }, "  ");
   }
   const results = await runWithConcurrency(assignments, concurrency, (assignment) =>
@@ -1428,10 +1439,17 @@ async function swarm(flags) {
     });
   }
 
-  console.log(`Swarm finished ${results.length} task${results.length === 1 ? "" : "s"}.`);
+  term.success("Swarm finished", `${results.length} task${results.length === 1 ? "" : "s"}`);
   for (const result of results) {
-    console.log(`${result.task.id} ${result.patch.status}: ${result.patch.summary || ""}`);
+    printTaskResult(result.task, result.patch);
   }
+}
+
+function printTaskResult(task, patch) {
+  const status = patch.status === "completed" ? "completed" : patch.status || "unknown";
+  term.check(status === "completed", `${task.id} ${status}`, task.title);
+  const summary = patch.summary || "";
+  if (summary) console.log(term.wrapBlock(summary, { indent: "    ", maxLines: 5 }));
 }
 
 export function selectSwarmCandidates(spec, { maxTasks, parallelMode = "default" }) {
@@ -1555,12 +1573,14 @@ function printSmartParallelAnalysis(analysis, indent = "") {
   for (const task of analysis.selected) {
     const files = taskExpectedFiles(task);
     const group = normalizedParallelGroup(task) || "auto";
-    console.log(`${indent}selected ${task.id}: group=${group} risk=${task.risk || "medium"} files=${files.length ? files.join(", ") : "unknown"} title=${task.title}`);
+    console.log(`${indent}selected ${task.id.padEnd(8)} group=${group.padEnd(8)} risk=${String(task.risk || "medium").padEnd(6)} files=${files.length ? files.join(", ") : "unknown"}`);
+    console.log(`${indent}  ${task.title}`);
   }
   for (const item of analysis.deferred) {
     const files = taskExpectedFiles(item.task);
     const group = normalizedParallelGroup(item.task) || "auto";
-    console.log(`${indent}deferred ${item.task.id}: ${item.reason}; group=${group} files=${files.length ? files.join(", ") : "unknown"} title=${item.task.title}`);
+    console.log(`${indent}deferred ${item.task.id.padEnd(8)} ${item.reason}; group=${group}; files=${files.length ? files.join(", ") : "unknown"}`);
+    console.log(`${indent}  ${item.task.title}`);
   }
 }
 
