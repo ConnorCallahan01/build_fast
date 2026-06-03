@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import path from "node:path";
 import { specKeyFromNotion } from "../src/notion.js";
+import { readJson, writeJson } from "../src/util.js";
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
@@ -69,9 +70,30 @@ try {
     /Unsupported worker adapter: codex/
   );
 
+  const worktreePath = path.join(specPath, "test-worktree");
+  await mkdir(worktreePath, { recursive: true });
+  await writeFile(path.join(worktreePath, "ship-preview.txt"), "from worker\n");
+  const programFile = path.join(specPath, "program", "program.json");
+  const program = await readJson(programFile);
+  program.specs[0].tasks[0] = {
+    ...program.specs[0].tasks[0],
+    status: "completed",
+    lastResult: {
+      worktree: worktreePath,
+      changed_files: ["ship-preview.txt"]
+    }
+  };
+  await writeJson(programFile, program);
+
   const shipOutput = await cli(["ship", "--ntn", notionTarget, "--branch", "build-fast/test-branch"]);
   assert.match(shipOutput, /Ship preview/);
+  assert.match(shipOutput, /Before applying ship/);
+  assert.match(shipOutput, /build_fast collect --task task-001 --apply/);
+  assert.match(shipOutput, /build_fast ship --apply/);
   assert.match(shipOutput, /Dry run only/);
+
+  const cleanupOutput = await cli(["cleanup", "--ntn", notionTarget]);
+  assert.match(cleanupOutput, /would remove spec-001\/task-001 worktree/);
   await rm(programPath, { recursive: true, force: true });
 } finally {
   await rm(specPath, { recursive: true, force: true });

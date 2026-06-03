@@ -21,7 +21,7 @@ build_fast inspect --ntn "$NTN"
 build_fast status
 ```
 
-`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, smart parallel settings, and browser QA. The interactive wizard uses an orange animated banner and arrow-key selectors for choices. Claude Code and `junior_mode` are available now; Codex, OpenCode, `intern_mode`, and `boss_mode` are shown as planned and are not saved as active defaults yet. If the target Notion page is missing the build_fast schema, init creates the `Specs`, `Spec Tasks`, and `Bugs` data sources automatically unless you pass `--no-create-schema`. Pass `--init-git` to initialize a git repository non-interactively when one is missing. Set `BUILD_FAST_ANIMATION=0` to disable the banner animation.
+`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, smart parallel settings, and browser QA. Commands run from that project use the saved Notion page automatically; pass `--ntn` only to override it. The interactive wizard uses an orange animated banner and arrow-key selectors for choices. Claude Code and `junior_mode` are available now; Codex, OpenCode, `intern_mode`, and `boss_mode` are shown as planned and are not saved as active defaults yet. If the target Notion page is missing the build_fast schema, init creates the `Specs`, `Spec Tasks`, and `Bugs` data sources automatically unless you pass `--no-create-schema`. Pass `--init-git` to initialize a git repository non-interactively when one is missing. Set `BUILD_FAST_ANIMATION=0` to disable the banner animation.
 
 ## Goal And Planning
 
@@ -213,7 +213,7 @@ When final QA fails, `drive` logs bugs, writes a JSON artifact, creates `[bug]` 
 Run a human acceptance pass after `go` and automated QA:
 
 ```bash
-node bin/build_fast.js user-test --ntn "$NTN"
+node bin/build_fast.js user-test
 ```
 
 If `init` saved a default Notion page, the short form works from the project directory:
@@ -232,9 +232,13 @@ Useful flags:
 | `--run-setup` | Start configured setup commands, such as `npm run demo`, while the checklist runs |
 | `--keep-running` | Leave started setup processes running after the checklist exits |
 | `--create-tasks` | Add `[user-test]` follow-up tasks for failed/tweak checks |
+| `--no-sync` | Skip the automatic Notion sync after the checklist finishes |
+| `--full-sync` | Refresh spec/task Notion pages before writing the user-test summary |
 | `--yes` | Non-interactive pass-all mode for smoke tests |
 | `--fail-checks 1,3` | Non-interactively mark selected checklist numbers as failed |
 | `--tweak-checks 2` | Non-interactively mark selected checklist numbers as needing tweaks |
+
+After the checklist finishes, `user-test` saves the local artifact and, when `NOTION_API_TOKEN` is available, writes a managed `build_fast User Test` summary section on already-synced spec pages. If the spec pages do not exist yet, it performs an initial full sync first. A passed run is ready for `build_fast ship`; a failed or tweak-needed run should be rerun with `--create-tasks`, then repaired with `build_fast go`.
 
 The browser QA MVP expects the target project to expose a demo through `npm run demo`. It starts that script with a temporary `PORT`, waits for the local page, then checks for a browser-ready HTML demo, expected UI anchors, served JavaScript modules, and linked stylesheet/script assets that resolve to `200` with the expected MIME types. If `playwright` is installed, QA also renders the page in Chromium, checks console/page errors, verifies rendered selectors/text, and runs configured interaction steps. Add `--require-playwright` to fail when Playwright is unavailable.
 
@@ -314,16 +318,27 @@ Claude Code is the only supported adapter today. Unsupported adapters fail clear
 Preview branch/commit/push/PR commands:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --pr --base main
+node bin/build_fast.js ship --branch build-fast/my-feature --pr --base main
 ```
 
 The preview prints the target git root, pathspec, changed files, uncollected completed worktree output, commands it would run, and the generated PR body.
+If ship finds uncollected completed worktree output, run the printed `build_fast collect ... --apply` command first, then rerun `build_fast ship --apply`. Use `--force` only when you intentionally want to ship the current checkout without collecting recorded worker output.
+After a successful program ship, `build_fast cleanup --apply --force --branches` removes recorded worktrees and their task branches across all program specs.
 
 Apply the branch/commit/push flow and create a draft PR:
 
 ```bash
-node bin/build_fast.js ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr --base main
+node bin/build_fast.js ship --branch build-fast/my-feature --apply --pr --base main
 ```
+
+If the project has no `origin` remote yet, publish it through GitHub CLI:
+
+```bash
+node bin/build_fast.js ship --apply --publish
+node bin/build_fast.js ship --apply --publish --repo owner/name --public
+```
+
+`--publish` creates a private GitHub repo by default, configures it as `origin`, and pushes the ship branch. Use `--public` or `--internal` to change visibility.
 
 Useful flags:
 
@@ -336,4 +351,4 @@ Useful flags:
 | `--ready` | Create a non-draft PR |
 | `--force` | Allow shipping current checkout even when uncollected worktree output exists |
 
-On success, `ship` records branch, commit, repo URL, PR URL, changed files, and shipped timestamp in local spec state, syncs Notion `GitHub Repo`/`GitHub PR` properties when present, and appends a ship summary. PR bodies include the spec goal, Notion link, task status, changed files, recorded checks, and related Bugs ledger entries.
+On success, `ship` records branch, commit, repo URL, PR URL, changed files, and shipped timestamp in local spec state, syncs Notion `GitHub Repo`/`GitHub PR` properties when present, and appends a ship summary. Program ships attach the same repo/PR metadata to every spec in the program so the Notion audit trail points back to the shipped PR. PR bodies include the spec goal, Notion link, task status, changed files, recorded checks, and related Bugs ledger entries.

@@ -76,6 +76,7 @@ This starts an interactive setup flow with arrow-key choices, saves project defa
 If the Notion parent page is blank, `init` creates the required build_fast data sources automatically.
 If the current folder is not a git repo, interactive init offers to run `git init`; non-interactive setup can pass `--init-git`. Init also ensures `.build_fast/` and `node_modules/` are listed in `.gitignore`.
 The banner animation only runs in a real TTY and can be disabled with `BUILD_FAST_ANIMATION=0`.
+After `init`, commands use the saved Notion page by default. Pass `--ntn` only when you want to override that target.
 
 Create a plan:
 
@@ -197,9 +198,11 @@ Useful options:
 build_fast user-test --run-setup
 build_fast user-test --create-tasks
 build_fast user-test --keep-running
+build_fast user-test --no-sync
+build_fast user-test --full-sync
 ```
 
-Use `--create-tasks` when a check fails or needs tweaks; build_fast appends `[user-test]` follow-up tasks to the active spec/program so the next `go` can repair them.
+After the checklist finishes, build_fast writes a managed `build_fast User Test` summary on already-synced Notion spec pages when `NOTION_API_TOKEN` is available. It only does an initial full sync if those pages do not exist yet; use `--full-sync` to explicitly refresh spec/task pages too. Use `--create-tasks` when a check fails or needs tweaks; build_fast appends `[user-test]` follow-up tasks to the active spec/program so the next `go` can repair them. A passed user test is ready for `build_fast ship`.
 
 Specs can define a browser QA profile so the checks are project-specific instead of Orbit-specific:
 
@@ -258,16 +261,22 @@ The dry run prints plan-quality warnings, selected/deferred smart-parallel tasks
 Preview the release handoff first:
 
 ```bash
-build_fast ship --ntn "$NTN" --branch build-fast/my-feature --pr --base main
+build_fast ship --branch build-fast/my-feature --pr --base main
 ```
 
 Apply it when the preview is right:
 
 ```bash
-build_fast ship --ntn "$NTN" --branch build-fast/my-feature --apply --pr --base main
+build_fast ship --branch build-fast/my-feature --apply --pr --base main
 ```
 
-`ship` refuses to apply when completed worktree output is still uncollected, commits only the target project path, pushes the branch, opens a draft PR through `gh` when requested, then syncs repo/PR metadata back to Notion. The preview prints the generated PR body so you can inspect the summary, tasks, changed files, checks, and linked bugs before pushing. Add `--ready` if you want a non-draft PR.
+If there is no `origin` remote yet, publish the repo first-class through ship:
+
+```bash
+build_fast ship --apply --publish
+```
+
+`ship` refuses to apply when completed worktree output is still uncollected, commits only the target project path, pushes the branch, opens a draft PR through `gh` when requested, then syncs repo/PR metadata back to Notion. For program runs, the same ship metadata is attached to every spec in the run so the PR audit trail is complete. The preview prints the generated PR body so you can inspect the summary, tasks, changed files, checks, and linked bugs before pushing. Add `--ready` if you want a non-draft PR.
 
 ## Notion Setup
 

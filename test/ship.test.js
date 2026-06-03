@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { shipPrBody } from "../src/commands.js";
+import { applyProgramShipMetadata, shipMissingRemoteMessage, shipPrBody } from "../src/commands.js";
 
 const body = shipPrBody(
   {
@@ -62,5 +62,34 @@ assert.match(body, /- npm test/);
 assert.match(body, /- node bin\/build_fast\.js qa --type browser/);
 assert.match(body, /- done: bug-001 Stylesheet returned 404 \(https:\/\/notion\.so\/bug-page\)/);
 assert.doesNotMatch(body, /bug-ignored/);
+
+const missingRemote = shipMissingRemoteMessage({
+  projectRoot: "/tmp/project",
+  branch: "build-fast/example"
+});
+assert.match(missingRemote, /stopped before commit/);
+assert.match(missingRemote, /build_fast ship --apply --publish/);
+assert.match(missingRemote, /git -C \/tmp\/project remote add origin <git-url>/);
+assert.match(missingRemote, /build_fast ship --apply --branch build-fast\/example/);
+
+const shippedProgram = applyProgramShipMetadata({
+  status: "planned",
+  specs: [
+    { id: "spec-001", status: "completed" },
+    { id: "spec-002", status: "planned" }
+  ]
+}, {
+  branch: "build-fast/example",
+  commit: "abc123",
+  repoUrl: "https://github.com/example/project.git",
+  prUrl: "",
+  changedFiles: ["index.js"],
+  shippedAt: "2026-01-01T00:00:00.000Z"
+});
+assert.equal(shippedProgram.status, "completed");
+assert.equal(shippedProgram.specs.every((spec) => spec.status === "completed"), true);
+assert.equal(shippedProgram.specs.every((spec) => spec.ship.branch === "build-fast/example"), true);
+assert.equal(shippedProgram.specs.every((spec) => spec.githubRepoUrl === "https://github.com/example/project.git"), true);
+assert.equal(shippedProgram.specs.every((spec) => spec.githubPrUrl === ""), true);
 
 console.log("ship tests passed");

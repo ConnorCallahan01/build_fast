@@ -6,6 +6,10 @@ export function parseArgs(argv) {
   const args = [...argv];
   let command = args.shift();
 
+  if (command === "-h" || command === "--help") {
+    return { command: "help", flags: {} };
+  }
+
   if (!command || command.startsWith("--")) {
     if (command) args.unshift(command);
     command = inferCommandFromFlags(args);
@@ -118,31 +122,31 @@ export function printHelp() {
 Commands:
   doctor
   init   [--ntn <notion-url>] [--project <dir>] [--worker claude] [--install-qa] [--yes]
-  goal   --goal "..." --ntn <notion-url> --project <dir> --type <type> [--yes|--interactive]
-  program --goal "..." --ntn <notion-url> --project <dir> [--drive]
+  goal   --goal "..." [--ntn <notion-url>] [--project <dir>] --type <type> [--yes|--interactive]
+  program --goal "..." [--ntn <notion-url>] [--project <dir>] [--drive]
   plan   [--goal "..."] [--ntn <notion-url>] [--project <dir>] [--type <type>]
          [--no-agent for deterministic local planning]
          Types: feature, bug, chore (single spec)
                 project, refactor, init, overhaul (multi-spec program)
-  tasks  --ntn <notion-url> [regenerates from an existing local spec]
-  start  --goal "..." --ntn <notion-url> --project <dir> --type <type> --autopilot junior_mode
-  drive  --ntn <notion-url> [--goal "..." | --from-goal] [--project <dir>] [--type <type>] [--parallel smart] [--dry-run] [--qa browser] [--max-qa-repairs 1]
+  tasks  [--ntn <notion-url>] [regenerates from an existing local spec]
+  start  --goal "..." [--ntn <notion-url>] [--project <dir>] --type <type> --autopilot junior_mode
+  drive  [--ntn <notion-url>] [--goal "..." | --from-goal] [--project <dir>] [--type <type>] [--parallel smart] [--dry-run] [--qa browser] [--max-qa-repairs 1]
   go     [uses defaults saved by init; equivalent to drive with smart parallel/browser QA defaults]
-  run    --ntn <notion-url> [--autopilot intern_mode|junior_mode|boss_mode]
-  swarm  --ntn <notion-url> [--concurrency 2] [--max-tasks 2] [--parallel smart]
-  status --ntn <notion-url> [--spec spec-001]
-  sync   --ntn <notion-url> [--mode data-source|blocks]
-  compact --ntn <notion-url> [--keep-runs 1]
-  collect --ntn <notion-url> [--task task-003] [--apply] [--force] [--patch]
-  cleanup --ntn <notion-url> [--task task-003] [--apply] [--force] [--branches]
-  inspect --ntn <notion-url>
-  stop   --ntn <notion-url>
-  review --ntn <notion-url> --type pr_readiness [--create-tasks]
-  qa     --ntn <notion-url> --type browser [--create-task]
+  run    [--ntn <notion-url>] [--autopilot intern_mode|junior_mode|boss_mode]
+  swarm  [--ntn <notion-url>] [--concurrency 2] [--max-tasks 2] [--parallel smart]
+  status [--ntn <notion-url>] [--spec spec-001]
+  sync   [--ntn <notion-url>] [--mode data-source|blocks]
+  compact [--ntn <notion-url>] [--keep-runs 1]
+  collect [--ntn <notion-url>] [--task task-003] [--apply] [--force] [--patch]
+  cleanup [--ntn <notion-url>] [--task task-003] [--apply] [--force] [--branches]
+  inspect [--ntn <notion-url>]
+  stop   [--ntn <notion-url>]
+  review [--ntn <notion-url>] --type pr_readiness [--create-tasks]
+  qa     [--ntn <notion-url>] --type browser [--create-task]
   qa-setup [--project <dir> | --ntn <notion-url>] [--install] [--package-manager npm|pnpm|yarn|bun]
-  user-test [--ntn <notion-url>] [--run-setup] [--create-tasks] [--keep-running]
-  bugs   --ntn <notion-url> [--create-tasks]
-  ship   --ntn <notion-url> [--branch build-fast/name] [--apply] [--pr]
+  user-test [--ntn <notion-url>] [--run-setup] [--create-tasks] [--keep-running] [--no-sync] [--full-sync]
+  bugs   [--ntn <notion-url>] [--create-tasks]
+  ship   [--ntn <notion-url>] [--branch build-fast/name] [--apply] [--pr] [--publish] [--repo owner/name]
   workers [--worker claude]
 
 Compatibility aliases:

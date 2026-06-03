@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { specKeyFromNotion } from "../src/notion.js";
-import { readJson } from "../src/util.js";
+import { readJson, writeJson } from "../src/util.js";
 
 const root = process.cwd();
 const notionTarget = `local-user-test-${Date.now()}`;
@@ -13,7 +13,7 @@ async function cli(args, options = {}) {
   return await new Promise((resolve, reject) => {
     const child = spawn("node", ["bin/build_fast.js", ...args], {
       cwd: root,
-      env: { ...process.env, NOTION_API_TOKEN: "" },
+      env: { ...process.env, NOTION_API_TOKEN: "", ...(options.env || {}) },
       stdio: ["pipe", "pipe", "pipe"]
     });
     let output = "";
@@ -48,6 +48,9 @@ try {
     "--no-agent"
   ]);
 
+  const helpRun = await cli(["-h"]);
+  assert.match(helpRun, /user-test/);
+
   const dryRun = await cli(["user-test", "--ntn", notionTarget, "--dry-run"]);
   assert.match(dryRun, /User Test/);
   assert.match(dryRun, /Checklist/);
@@ -55,13 +58,37 @@ try {
 
   const passRun = await cli(["user-test", "--ntn", notionTarget, "--yes"]);
   assert.match(passRun, /Result:\s+passed/);
+  assert.match(passRun, /Notion Sync/);
+  assert.match(passRun, /missing NOTION_API_TOKEN/);
+  assert.match(passRun, /build_fast ship/);
+  assert.doesNotMatch(passRun, /ship --ntn/);
 
   const runs = await readdir(path.join(specPath, "user-tests"));
   assert.equal(runs.length, 1);
 
+  const specPathname = path.join(specPath, "spec.json");
+  const specWithBrowserQa = await readJson(specPathname);
+  specWithBrowserQa.notion = { specPageId: "fake-page-id" };
+  specWithBrowserQa.browserQa = {
+    startCommand: "node -e \"console.log(process.env.PORT); setTimeout(() => {}, 30000)\"",
+    url: "http://127.0.0.1:${PORT}/demo/"
+  };
+  await writeJson(specPathname, specWithBrowserQa);
+
+  const fastSyncRun = await cli(["user-test", "--ntn", notionTarget, "--yes"], { env: { NOTION_API_TOKEN: "fake-token" } });
+  assert.match(fastSyncRun, /Fast sync/);
+  assert.match(fastSyncRun, /Notion sync failed/);
+  assert.doesNotMatch(fastSyncRun, /missing NOTION_API_TOKEN/);
+
+  const setupRun = await cli(["user-test", "--ntn", notionTarget, "--run-setup", "--yes", "--port", "19001"]);
+  assert.match(setupRun, /http:\/\/127\.0\.0\.1:19001\/demo\//);
+  assert.doesNotMatch(setupRun, /\$\{PORT\}/);
+
   const failRun = await cli(["user-test", "--ntn", notionTarget, "--create-tasks", "--fail-checks", "1", "--note", "Needs clearer copy"]);
   assert.match(failRun, /Result:\s+failed/);
   assert.match(failRun, /Created follow-up tasks/);
+  assert.match(failRun, /build_fast go/);
+  assert.doesNotMatch(failRun, /go --ntn/);
 
   const spec = await readJson(path.join(specPath, "spec.json"));
   assert.ok(spec.tasks.some((task) => task.title.startsWith("[user-test]")));

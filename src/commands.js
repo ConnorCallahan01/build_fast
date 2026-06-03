@@ -12,7 +12,7 @@ import { checkNotionPage, inspectNotionPage, markdownBlocks, NotionClient, parse
 import { renderPrompt } from "./prompts.js";
 import { scanRepo } from "./repo-scan.js";
 import * as term from "./terminal.js";
-import { ensureDir, newId, normalizeProject, nowIso, optionalString, pathExists, printHelp, readJson, requireFlag, writeJson } from "./util.js";
+import { ensureDir, newId, normalizeProject, nowIso, optionalString, pathExists, printHelp, readJson, requireFlag, shortHash, writeJson } from "./util.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -295,7 +295,8 @@ function missingBuildFastSources(mapping) {
   return [
     ["Specs", mapping.specs],
     ["Spec Tasks", mapping.specTasks],
-    ["Bugs", mapping.bugs]
+    ["Bugs", mapping.bugs],
+    ["User Tests", mapping.userTests]
   ].filter(([, source]) => !source).map(([name]) => name);
 }
 
@@ -378,8 +379,7 @@ function cliCommand() {
 
 async function go(flags = {}) {
   const config = await ensureConfig();
-  const notionUrl = optionalString(flags, "ntn", config.defaultNotion || "");
-  if (!notionUrl) throw new Error("No default Notion page configured. Run `build_fast init --ntn <page>` or pass --ntn.");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   return drive({
     ...flags,
     ntn: notionUrl,
@@ -395,7 +395,7 @@ async function go(flags = {}) {
 
 async function goal(flags) {
   const config = await ensureConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const rawGoal = requireFlag(flags, "goal");
   const type = optionalString(flags, "type", "feature");
   const project = normalizeProject(optionalString(flags, "project", process.cwd()));
@@ -654,8 +654,7 @@ async function loadGoalContract(config, notionUrl) {
 async function plan(flags) {
   const config = await ensureConfig();
   validateWorkerFlag(flags);
-  const notionUrl = optionalString(flags, "ntn", config.defaultNotion || "");
-  if (!notionUrl) throw new Error("Missing required flag: --ntn. Run `build_fast init --ntn <page>` to save a default.");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   let type = optionalString(flags, "type", "feature");
   const project = normalizeProject(optionalString(flags, "project", config.defaultProject || process.cwd()));
 
@@ -837,7 +836,7 @@ function normalizePlan(parsed, goal, repoContext = undefined) {
 async function run(flags) {
   const config = await loadConfig();
   validateWorkerFlag(flags);
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot);
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "inherit");
   let spec = await loadSpec(config, notionUrl);
@@ -893,8 +892,7 @@ async function run(flags) {
 async function drive(flags) {
   validateWorkerFlag(flags);
   let config = await ensureConfig();
-  const notionUrl = optionalString(flags, "ntn", config.defaultNotion || "");
-  if (!notionUrl) throw new Error("Missing required flag: --ntn. Run `build_fast init --ntn <page>` to save a default.");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot || "junior_mode");
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "managed");
   const concurrency = optionalString(flags, "concurrency", String(config.defaultConcurrency || 2));
@@ -1752,7 +1750,7 @@ function validateWorkerFlag(flags) {
 async function swarm(flags) {
   const config = await loadConfig();
   validateWorkerFlag(flags);
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot);
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "inherit");
   const concurrency = Math.max(1, Number(optionalString(flags, "concurrency", "2")));
@@ -2237,8 +2235,7 @@ function taskPatchFromResult(result) {
 
 async function status(flags) {
   const config = await loadConfig();
-  const notionUrl = optionalString(flags, "ntn", config.defaultNotion || "");
-  if (!notionUrl) throw new Error("Missing required flag: --ntn. Run `build_fast init --ntn <page>` to save a default.");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const workers = await readActiveWorkers(config);
 
   const program = await loadProgram(config, notionUrl);
@@ -2298,12 +2295,15 @@ async function userTest(flags = {}) {
   const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
   const autoPass = flags.yes === true || flags.yes === "true";
   const createTasks = flags["create-tasks"] === true || flags["create-tasks"] === "true" || flags["create-task"] === true || flags["create-task"] === "true";
+  const runSetup = flags["run-setup"] === true || flags["run-setup"] === "true";
+  const setupPort = runSetup ? userTestSetupPort(flags) : optionalString(flags, "port", process.env.PORT || "");
+  const openUrls = resolveUserTestUrls(profile.urls, setupPort);
 
   term.section("User Test");
   term.keyValue("Target", `${target.title} [${target.status || "planned"}]`);
   term.keyValue("Mode", program ? "program" : "spec");
   term.keyValue("Project", target.project || process.cwd());
-  if (profile.urls.length) printStatusList("Open", profile.urls);
+  if (openUrls.length) printStatusList("Open", openUrls);
   if (profile.setup.length) printStatusList("Setup", profile.setup.map((step) => step.command || step.label || step.url).filter(Boolean));
   printStatusList("Checklist", profile.checks);
 
@@ -2330,8 +2330,8 @@ async function userTest(flags = {}) {
 
   const startedProcesses = [];
   try {
-    if (flags["run-setup"] === true || flags["run-setup"] === "true") {
-      run.setup = await runUserTestSetup(profile, target.project || process.cwd(), startedProcesses);
+    if (runSetup) {
+      run.setup = await runUserTestSetup(profile, target.project || process.cwd(), startedProcesses, { port: setupPort });
     } else if (profile.setup.length) {
       term.warn("Setup not started", "rerun with --run-setup to start configured commands");
     }
@@ -2354,11 +2354,27 @@ async function userTest(flags = {}) {
     term.section("User Test Result");
     term.keyValue("Result", run.status);
     term.keyValue("Artifact", artifactPath);
+
+    if (!(flags["no-sync"] === true || flags["no-sync"] === "true")) {
+      try {
+        await syncUserTestRunToNotion({
+          config,
+          notionUrl,
+          run,
+          artifactPath,
+          fullSync: flags["full-sync"] === true || flags["full-sync"] === "true"
+        });
+      } catch (error) {
+        term.warn("Notion sync failed", error.message || String(error));
+      }
+    }
+
     const actionable = run.answers.filter((answer) => answer.result === "fail" || answer.result === "tweak");
     if (actionable.length) {
       printStatusList("Follow up", actionable.map((answer) => `${answer.result}: ${answer.check}${answer.note ? ` — ${answer.note}` : ""}`));
       if (!createTasks) term.info("Next", "rerun with --create-tasks to add follow-up work to the active spec/program");
     }
+    printUserTestNextStep({ run, createTasks });
   } finally {
     if (!(flags["keep-running"] === true || flags["keep-running"] === "true")) {
       for (const child of startedProcesses) child.kill("SIGTERM");
@@ -2404,6 +2420,21 @@ function buildUserTestProfile(target, flags = {}) {
   };
 }
 
+function userTestSetupPort(flags = {}) {
+  const explicit = optionalString(flags, "port", "");
+  if (explicit) return explicit;
+  if (process.env.PORT) return process.env.PORT;
+  return String(19000 + Math.floor(Math.random() * 1000));
+}
+
+function resolveUserTestUrls(urls = [], port = "") {
+  return urls.map((url) => {
+    const value = String(url || "").trim();
+    if (!value || !port) return value;
+    return value.replaceAll("${PORT}", String(port));
+  }).filter(Boolean);
+}
+
 function normalizeUserTestProfile(value) {
   if (!value || typeof value !== "object") return { setup: [], urls: [], checks: [] };
   const setup = Array.isArray(value.setup)
@@ -2442,7 +2473,7 @@ function defaultUserTestChecks(target, browser) {
   return checks;
 }
 
-async function runUserTestSetup(profile, project, startedProcesses) {
+async function runUserTestSetup(profile, project, startedProcesses, options = {}) {
   const results = [];
   for (const step of profile.setup) {
     if (!step.command) {
@@ -2452,7 +2483,7 @@ async function runUserTestSetup(profile, project, startedProcesses) {
     term.step(`Starting: ${step.command}`);
     const child = spawn("/bin/zsh", ["-lc", step.command], {
       cwd: project,
-      env: { ...process.env },
+      env: { ...process.env, ...(options.port ? { PORT: String(options.port) } : {}) },
       stdio: ["ignore", "pipe", "pipe"]
     });
     startedProcesses.push(child);
@@ -2460,7 +2491,7 @@ async function runUserTestSetup(profile, project, startedProcesses) {
     child.stdout.on("data", (chunk) => { output += chunk.toString(); });
     child.stderr.on("data", (chunk) => { output += chunk.toString(); });
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    results.push({ ...step, status: child.exitCode === null ? "running" : "exited", detail: firstOutputLine(output) });
+    results.push({ ...step, status: child.exitCode === null ? "running" : "exited", port: options.port || "", detail: firstOutputLine(output) });
   }
   return results;
 }
@@ -2528,6 +2559,166 @@ async function saveUserTestRun(config, notionUrl, run) {
   const filePath = path.join(dir, `${run.id}.json`);
   await writeJson(filePath, run);
   return filePath;
+}
+
+async function syncUserTestRunToNotion({ config, notionUrl, run, artifactPath, fullSync = false }) {
+  term.section("Notion Sync");
+  if (!config.notionToken) {
+    term.warn("Skipped", "missing NOTION_API_TOKEN");
+    return;
+  }
+
+  const program = await loadProgram(config, notionUrl);
+  if (program) {
+    let synced = program;
+    if (fullSync || !program.specs.some((spec) => spec?.notion?.specPageId)) {
+      await syncProgram({ config, notionUrl, program });
+      synced = await loadProgram(config, notionUrl) || program;
+    } else {
+      term.info("Fast sync", "updating user-test summary only; use --full-sync to refresh specs/tasks");
+    }
+    await syncUserTestDataSource(config, notionUrl, synced.specs || [], run, artifactPath);
+    await replaceUserTestSections(config, synced.specs || [], run, artifactPath);
+    return;
+  }
+
+  let spec = await loadSpec(config, notionUrl);
+  if (!spec) {
+    term.warn("Skipped", "no local spec found");
+    return;
+  }
+
+  if (fullSync || !spec.notion?.specPageId) {
+    const result = await syncToDataSources(config, notionUrl, spec);
+    if (result.ok && result.spec) {
+      spec = result.spec;
+      await saveSpec(config, notionUrl, spec);
+      term.success("Synced", spec.title);
+    } else if (result.ok) {
+      term.success("Synced", spec.title);
+    } else {
+      term.warn("Skipped", result.detail);
+    }
+  } else {
+    term.info("Fast sync", "updating user-test summary only; use --full-sync to refresh specs/tasks");
+  }
+
+  await syncUserTestDataSource(config, notionUrl, [spec], run, artifactPath);
+  await replaceUserTestSections(config, [spec], run, artifactPath);
+}
+
+async function syncUserTestDataSource(config, notionUrl, specs, run, artifactPath) {
+  let schema = await loadOrInspectSchema(config, notionUrl);
+  schema = await ensureBuildFastNotionSchema(config, notionUrl, schema);
+  let mapping = resolveBuildFastDataSources(schema);
+  if (!mapping.userTests) {
+    schema = await refreshInspectedSchema(config, notionUrl);
+    schema = await ensureBuildFastNotionSchema(config, notionUrl, schema);
+    mapping = resolveBuildFastDataSources(schema);
+  }
+  if (!mapping.userTests) {
+    term.warn("User-test database skipped", "could not find or create User Tests data source");
+    return;
+  }
+
+  const notion = new NotionClient({ token: config.notionToken, version: config.notionVersion });
+  const existing = await findExistingUserTestPage(notion, mapping.userTests, run.id);
+  const properties = buildUserTestProperties(run, artifactPath, specs, mapping.userTests);
+  const page = existing
+    ? await notion.updatePage(existing.id, properties)
+    : await notion.createDataSourcePage(mapping.userTests.id, properties, markdownBlocks(formatUserTestRunMarkdown(run, artifactPath)));
+  term.success("User-test database synced", page.url || run.id);
+}
+
+async function findExistingUserTestPage(notion, dataSource, runId) {
+  const hasRunId = Boolean(dataSource.properties?.["Run ID"]);
+  const response = await notion.queryDataSource(dataSource.id, {
+    page_size: 10,
+    filter: hasRunId ? {
+      or: [
+        { property: "Run ID", rich_text: { equals: runId } },
+        { property: "Name", title: { equals: runId } }
+      ]
+    } : { property: "Name", title: { equals: runId } }
+  });
+  return response.results?.[0];
+}
+
+function buildUserTestProperties(run, artifactPath, specs, dataSource = {}) {
+  const followUpTaskIds = new Set((run.followUpTasks || []).map((task) => task.id));
+  const followUpPages = [];
+  for (const spec of specs || []) {
+    for (const task of spec.tasks || []) {
+      if (followUpTaskIds.has(task.id) && task.notion?.taskPageId) followUpPages.push(task.notion.taskPageId);
+    }
+  }
+  return cleanProperties({
+    Name: notionTitle(run.id),
+    Completed: notionDate(run.completedAt || run.startedAt),
+    "Follow-up Tasks": notionRelation(followUpPages),
+    Notes: notionRichText(userTestNotes(run)),
+    Project: notionRichText(run.project || ""),
+    Result: notionSelect(run.status || "passed"),
+    Artifact: notionRichText(artifactPath || ""),
+    "Run ID": notionRichText(run.id)
+  }, dataSource.properties);
+}
+
+function notionDate(value) {
+  return value ? { date: { start: value } } : { date: null };
+}
+
+function userTestNotes(run) {
+  const counts = userTestAnswerCounts(run.answers || []);
+  const issues = (run.answers || []).filter((answer) => answer.result === "fail" || answer.result === "tweak");
+  const summary = `${counts.pass} pass, ${counts.fail} fail, ${counts.tweak} tweak, ${counts.skip} skip`;
+  if (!issues.length) return summary;
+  return `${summary}. Follow-up: ${issues.map((answer) => `${answer.result}: ${truncateUserTestTitle(answer.check)}`).join("; ")}`;
+}
+
+async function replaceUserTestSections(config, specs, run, artifactPath) {
+  const notion = new NotionClient({ token: config.notionToken, version: config.notionVersion });
+  let updated = 0;
+  for (const spec of specs) {
+    if (!spec?.notion?.specPageId) continue;
+    await replaceManagedSection(notion, spec.notion.specPageId, "build_fast User Test", formatUserTestRunMarkdown(run, artifactPath));
+    updated += 1;
+  }
+  if (updated) term.success("User-test summary synced", `${updated} Notion spec page${updated === 1 ? "" : "s"}`);
+  else term.warn("User-test summary skipped", "no synced Notion spec page found");
+}
+
+function formatUserTestRunMarkdown(run, artifactPath) {
+  const counts = userTestAnswerCounts(run.answers || []);
+  const failed = (run.answers || []).filter((answer) => answer.result === "fail" || answer.result === "tweak");
+  return [
+    "## build_fast User Test",
+    `Updated: ${nowIso()}`,
+    `Run: ${run.id}`,
+    `Status: ${run.status}`,
+    `Artifact: ${artifactPath}`,
+    `Checks: ${counts.pass} pass, ${counts.fail} fail, ${counts.tweak} tweak, ${counts.skip} skip`,
+    "## Follow-up",
+    failed.length ? failed.map((answer) => `- ${answer.result}: ${answer.check}${answer.note ? ` (${answer.note})` : ""}`).join("\n") : "- None."
+  ].join("\n\n");
+}
+
+function userTestAnswerCounts(answers) {
+  return answers.reduce((counts, answer) => {
+    counts[answer.result] = (counts[answer.result] || 0) + 1;
+    return counts;
+  }, { pass: 0, fail: 0, tweak: 0, skip: 0 });
+}
+
+function printUserTestNextStep({ run, createTasks }) {
+  const actionable = run.answers.some((answer) => answer.result === "fail" || answer.result === "tweak");
+  if (actionable && createTasks) {
+    term.info("Next", "run `build_fast go` to repair the user-test follow-up tasks");
+  } else if (actionable) {
+    term.info("Next", "rerun `build_fast user-test --create-tasks` to turn failures/tweaks into repair tasks");
+  } else {
+    term.info("Next", "ship the passed build with `build_fast ship`");
+  }
 }
 
 async function createUserTestFollowUpTasks({ config, notionUrl, target, program, answers }) {
@@ -2716,7 +2907,7 @@ function taskCounts(spec) {
 
 async function sync(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const program = await loadProgram(config, notionUrl);
   if (program) return syncProgram({ config, notionUrl, program });
 
@@ -2760,7 +2951,7 @@ async function syncProgram({ config, notionUrl, program }) {
 
 async function compact(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const keepRuns = Math.max(0, Number(optionalString(flags, "keep-runs", "1")));
   if (!config.notionToken) throw new Error("Missing NOTION_API_TOKEN.");
   const notion = new NotionClient({ token: config.notionToken, version: config.notionVersion });
@@ -2805,7 +2996,7 @@ async function compact(flags) {
 
 async function collect(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const apply = flags.apply === true || flags.apply === "true";
   const force = flags.force === true || flags.force === "true";
   const patch = flags.patch === true || flags.patch === "true";
@@ -2959,7 +3150,7 @@ function collectedOverlayTaskIds(spec) {
 
 async function cleanup(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const apply = flags.apply === true || flags.apply === "true";
   const force = flags.force === true || flags.force === "true";
   const deleteBranches = flags.branches === true || flags.branches === "true";
@@ -2967,12 +3158,12 @@ async function cleanup(flags) {
 
   const program = await loadProgram(config, notionUrl);
   if (program) {
-    let spec = await loadSpec(config, notionUrl);
-    if (!spec) {
-      console.log("No active spec found. Nothing to clean up.");
-      return;
+    let total = 0;
+    for (const spec of program.specs || []) {
+      total += await cleanupSpec({ spec: programToStandaloneSpec(program, spec), apply, force, deleteBranches, taskFilter, quietEmpty: true });
     }
-    return cleanupSpec({ spec, apply, force, deleteBranches, taskFilter });
+    if (!total) console.log("No recorded swarm worktrees found to clean up.");
+    return;
   }
 
   let spec = await loadSpec(config, notionUrl);
@@ -2980,13 +3171,13 @@ async function cleanup(flags) {
   return cleanupSpec({ spec, apply, force, deleteBranches, taskFilter });
 }
 
-async function cleanupSpec({ spec, apply, force, deleteBranches, taskFilter }) {
+async function cleanupSpec({ spec, apply, force, deleteBranches, taskFilter, quietEmpty = false }) {
   const gitRoot = await resolveGitRoot(spec.project);
   const targets = cleanupTargets(spec, taskFilter);
 
   if (!targets.length) {
-    console.log("No recorded swarm worktrees found to clean up.");
-    return;
+    if (!quietEmpty) console.log("No recorded swarm worktrees found to clean up.");
+    return 0;
   }
 
   for (const target of targets) {
@@ -3008,13 +3199,14 @@ async function cleanupSpec({ spec, apply, force, deleteBranches, taskFilter }) {
     console.log("Dry run only. Rerun with --apply to remove worktrees.");
     if (deleteBranches) console.log("Branch deletion was requested and will also require --apply.");
   }
+  return targets.length;
 }
 
 function cleanupTargets(spec, taskFilter) {
   return (spec.tasks || [])
     .filter((task) => !taskFilter || task.id === taskFilter)
     .map((task) => ({
-      taskId: task.id,
+      taskId: spec._program?.specId ? `${spec._program.specId}/${task.id}` : task.id,
       worktree: task.lastResult?.worktree,
       branch: task.lastResult?.branch
     }))
@@ -3308,26 +3500,42 @@ async function syncToDataSources(config, notionUrl, spec) {
   const notion = new NotionClient({ token: config.notionToken, version: config.notionVersion });
   let nextSpec = spec;
   let specPageId = spec.notion?.specPageId;
+  const specSync = specSyncPayload(spec, mapping.specs);
 
   if (!specPageId) {
     const existingPage = await findExistingSpecPage(notion, mapping.specs.id, spec);
-    const page = existingPage || await notion.createDataSourcePage(mapping.specs.id, buildSpecProperties(spec, mapping.specs), markdownBlocks(formatSpecMarkdown(spec)));
+    const page = existingPage || await notion.createDataSourcePage(mapping.specs.id, specSync.properties, markdownBlocks(formatSpecMarkdown(spec)));
+    if (existingPage) {
+      await notion.updatePage(page.id, specSync.properties);
+      await replaceManagedSection(notion, page.id, "build_fast Sync Snapshot", specSync.snapshot);
+    }
     nextSpec = attachNotionSpecPage(nextSpec, page);
+    nextSpec = setSpecNotionSync(nextSpec, specSync.hash);
     specPageId = page.id;
-  } else {
-    await notion.updatePage(specPageId, buildSpecProperties(spec, mapping.specs));
-    await replaceManagedSection(notion, specPageId, "build_fast Sync Snapshot", formatSpecSnapshotMarkdown(spec));
+  } else if (spec.notion?.syncHash !== specSync.hash) {
+    await notion.updatePage(specPageId, specSync.properties);
+    await replaceManagedSection(notion, specPageId, "build_fast Sync Snapshot", specSync.snapshot);
+    nextSpec = setSpecNotionSync(nextSpec, specSync.hash);
   }
 
   for (const task of nextSpec.tasks) {
+    const taskSync = taskSyncPayload(task, mapping.specTasks, specPageId);
     if (task.notion?.taskPageId) {
-      await notion.updatePage(task.notion.taskPageId, buildTaskProperties(task, mapping.specTasks, specPageId));
-      await replaceManagedSection(notion, task.notion.taskPageId, "build_fast Task Snapshot", formatTaskSnapshotMarkdown(task));
+      if (task.notion.syncHash !== taskSync.hash) {
+        await notion.updatePage(task.notion.taskPageId, taskSync.properties);
+        await replaceManagedSection(notion, task.notion.taskPageId, "build_fast Task Snapshot", taskSync.snapshot);
+        nextSpec = setTaskNotionSync(nextSpec, task.id, taskSync.hash);
+      }
       continue;
     }
     const existingTaskPage = await findExistingTaskPage(notion, mapping.specTasks.id, task, specPageId);
-    const page = existingTaskPage || await notion.createDataSourcePage(mapping.specTasks.id, buildTaskProperties(task, mapping.specTasks, specPageId), markdownBlocks(formatTaskMarkdown(task)));
+    const page = existingTaskPage || await notion.createDataSourcePage(mapping.specTasks.id, taskSync.properties, markdownBlocks(formatTaskMarkdown(task)));
+    if (existingTaskPage) {
+      await notion.updatePage(page.id, taskSync.properties);
+      await replaceManagedSection(notion, page.id, "build_fast Task Snapshot", taskSync.snapshot);
+    }
     nextSpec = attachNotionTaskPage(nextSpec, task.id, page);
+    nextSpec = setTaskNotionSync(nextSpec, task.id, taskSync.hash);
   }
 
   if (mapping.bugs) {
@@ -3408,6 +3616,13 @@ async function ensureBuildFastNotionSchema(config, notionUrl, schema, options = 
     mapping = resolveBuildFastDataSources(schema);
   }
 
+  if (!mapping.userTests) {
+    await notion.createDatabase(pageId, "User Tests", buildUserTestsDataSourceProperties(mapping.specTasks?.id));
+    if (options.verbose) term.success("Created Notion data source", "User Tests");
+    schema = await refreshSchemaUntil(config, notionUrl, (nextMapping) => nextMapping.userTests);
+    mapping = resolveBuildFastDataSources(schema);
+  }
+
   missing = missingBuildFastSources(mapping);
   if (options.verbose && missing.length) term.warn("Notion schema incomplete", `missing ${missing.join(", ")}`);
   return schema;
@@ -3453,6 +3668,20 @@ export function buildBugsDataSourceProperties(specsDataSourceId, tasksDataSource
     Updated: { last_edited_time: {} }
   };
   if (tasksDataSourceId) properties.Task = relationSchema(tasksDataSourceId);
+  return properties;
+}
+
+export function buildUserTestsDataSourceProperties(tasksDataSourceId = undefined) {
+  const properties = {
+    Name: { title: {} },
+    Completed: { date: {} },
+    Notes: { rich_text: {} },
+    Project: { rich_text: {} },
+    Result: selectSchema(["passed", "failed", "needs_tweaks"]),
+    Artifact: { rich_text: {} },
+    "Run ID": { rich_text: {} }
+  };
+  if (tasksDataSourceId) properties["Follow-up Tasks"] = relationSchema(tasksDataSourceId);
   return properties;
 }
 
@@ -3508,7 +3737,8 @@ export function resolveBuildFastDataSources(schema) {
   return {
     specs: sources.find((source) => sourceMatches(source, "Specs") && hasProperties(source, ["Name", "Status", "Project"])),
     specTasks: sources.find((source) => sourceMatches(source, "Spec Tasks") && hasProperties(source, ["Name", "Status", "Spec", "Branch"])),
-    bugs: sources.find((source) => sourceMatches(source, "Bugs") && hasProperties(source, ["Name", "Status", "Source", "Local ID"]))
+    bugs: sources.find((source) => sourceMatches(source, "Bugs") && hasProperties(source, ["Name", "Status", "Source", "Local ID"])),
+    userTests: sources.find((source) => sourceMatches(source, "User Tests") && hasProperties(source, ["Name", "Completed", "Notes", "Project"]))
   };
 }
 
@@ -3539,6 +3769,60 @@ function buildTaskProperties(task, dataSource, specPageId) {
     Spec: notionRelation([specPageId]),
     Branch: notionRichText(task.lastResult?.branch || "")
   }, dataSource.properties);
+}
+
+function specSyncPayload(spec, dataSource) {
+  const properties = buildSpecProperties(spec, dataSource);
+  const snapshot = formatSpecSnapshotMarkdown(spec);
+  return {
+    properties,
+    snapshot,
+    hash: syncHash({ type: "spec", properties, snapshot })
+  };
+}
+
+function taskSyncPayload(task, dataSource, specPageId) {
+  const properties = buildTaskProperties(task, dataSource, specPageId);
+  const snapshot = formatTaskSnapshotMarkdown(task);
+  return {
+    properties,
+    snapshot,
+    hash: syncHash({ type: "task", properties, snapshot })
+  };
+}
+
+function syncHash(value) {
+  return shortHash(JSON.stringify(value), 16);
+}
+
+function setSpecNotionSync(spec, hash) {
+  return {
+    ...spec,
+    notion: {
+      ...(spec.notion || {}),
+      syncHash: hash
+    },
+    updatedAt: nowIso()
+  };
+}
+
+function setTaskNotionSync(spec, taskId, hash) {
+  return {
+    ...spec,
+    updatedAt: nowIso(),
+    tasks: (spec.tasks || []).map((task) =>
+      task.id === taskId
+        ? {
+            ...task,
+            notion: {
+              ...(task.notion || {}),
+              syncHash: hash
+            },
+            updatedAt: nowIso()
+          }
+        : task
+    )
+  };
 }
 
 async function syncBugsToDataSource(config, notionUrl, notion, bugsDataSource, spec, specPageId) {
@@ -3793,7 +4077,7 @@ function blockTitle(block) {
 
 async function inspect(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const result = await inspectNotionPage(config, notionUrl);
   if (!result.ok) {
     console.log(`Notion inspect not completed: ${result.detail}`);
@@ -3860,7 +4144,7 @@ async function stop(flags) {
 
 async function review(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const reviewType = optionalString(flags, "type", "pr_readiness");
   const spec = await loadSpec(config, notionUrl);
   if (!spec) throw new Error("No local spec found. Run plan first.");
@@ -3929,7 +4213,7 @@ function addReviewTasks(spec, parsed = {}, reviewType) {
 
 async function qa(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const type = optionalString(flags, "type", "browser");
   const target = await loadActiveTarget(config, notionUrl);
   if (!target) throw new Error("No local spec or program found. Run plan/drive first.");
@@ -4467,7 +4751,7 @@ async function waitForHttp(url, timeoutMs) {
 
 async function bugs(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const items = await readBugs(config, notionUrl);
   if (flags["create-tasks"] || flags["create-task"]) {
     const target = await loadActiveTarget(config, notionUrl);
@@ -4599,7 +4883,7 @@ async function workers(flags) {
 
 async function ship(flags) {
   const config = await loadConfig();
-  const notionUrl = requireFlag(flags, "ntn");
+  const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const spec = await loadSpec(config, notionUrl);
   const program = await loadProgram(config, notionUrl);
   const programSpec = program?.specs?.at(-1);
@@ -4611,18 +4895,19 @@ async function ship(flags) {
   const message = optionalString(flags, "message", `build_fast: ${target.title}`);
   const apply = flags.apply === true || flags.apply === "true";
   const createPr = flags.pr === true || flags.pr === "true";
+  const publish = flags.publish === true || flags.publish === "true" || flags["create-repo"] === true || flags["create-repo"] === "true";
   const force = flags.force === true || flags.force === "true";
   const draft = !(flags.ready === true || flags.ready === "true");
   const baseBranch = optionalString(flags, "base", "");
   const projectPathspec = await gitPathspec(projectRoot, target.project);
   const collection = await collectSummary(config, notionUrl, target, undefined, { uncollectedOnly: true, skipMissing: true });
   const changedFiles = await gitChangedFiles(projectRoot, projectPathspec);
-  const repoUrl = await gitRemoteUrl(projectRoot);
+  let repoUrl = await gitRemoteUrl(projectRoot);
   const bugs = await readBugs(config, notionUrl);
-  const prBody = shipPrBody(target, { changedFiles, bugs, repoUrl, notionUrl });
+  let prBody = shipPrBody(target, { changedFiles, bugs, repoUrl, notionUrl });
 
   if (!apply) {
-    printShipPreview({ projectRoot, projectPathspec, branch, message, changedFiles, collection, createPr, draft, baseBranch, prBody });
+    printShipPreview({ projectRoot, projectPathspec, branch, message, changedFiles, collection, repoUrl, publish, createPr, draft, baseBranch, prBody });
     return;
   }
 
@@ -4630,22 +4915,37 @@ async function ship(flags) {
     throw new Error(
       [
         "Ship refused because completed worktree output has not been collected.",
-        "Run `build_fast collect --ntn <page>` to inspect it, then collect/apply the intended task.",
+        ...shipCollectNextLines(collection),
         "Use --force only if you intentionally want to ship the current checkout without collecting those outputs."
       ].join("\n")
     );
   }
-  if (!changedFiles.length) {
-    throw new Error(`No git changes found under ${projectPathspec}. Nothing to ship.`);
+  if (!repoUrl && !publish) {
+    throw new Error(shipMissingRemoteMessage({ projectRoot, branch }));
   }
 
   await switchShipBranch(projectRoot, branch);
   await git(["-C", projectRoot, "add", "--", projectPathspec]);
   const staged = await gitChangedFiles(projectRoot, projectPathspec, { staged: true });
-  if (!staged.length) throw new Error(`No staged changes found under ${projectPathspec}. Nothing to commit.`);
-  await git(["-C", projectRoot, "commit", "-m", message]);
-  await git(["-C", projectRoot, "push", "-u", "origin", branch]);
-  console.log(`Pushed ${branch}.`);
+  if (staged.length) {
+    await git(["-C", projectRoot, "commit", "-m", message]);
+  } else if (changedFiles.length) {
+    throw new Error(`No staged changes found under ${projectPathspec}. Nothing to commit.`);
+  } else {
+    console.log("No working tree changes; using existing HEAD for ship metadata.");
+  }
+  const shippedFiles = staged.length ? staged : await gitLastCommitFiles(projectRoot, projectPathspec);
+  if (!shippedFiles.length) {
+    throw new Error(`No changed files found under ${projectPathspec} in the working tree or HEAD. Nothing to ship.`);
+  }
+
+  if (publish && !repoUrl) {
+    repoUrl = await publishGitHubRepo(projectRoot, branch, flags);
+  } else {
+    await git(["-C", projectRoot, "push", "-u", "origin", branch]);
+    console.log(`Pushed ${branch}.`);
+  }
+  prBody = shipPrBody(target, { changedFiles: shippedFiles, bugs, repoUrl, notionUrl });
 
   let prUrl = "";
   if (createPr) {
@@ -4673,21 +4973,21 @@ async function ship(flags) {
     repoUrl,
     prUrl,
     message,
-    changedFiles: staged,
+    changedFiles: shippedFiles,
     shippedAt
   };
   await saveShipMetadata({ config, notionUrl, spec, program, programSpec, shipPatch });
-  await sync({ ntn: notionUrl });
-  const syncedTarget = await loadShipSummaryTarget(config, notionUrl, spec ? undefined : programSpec?.id);
-  await writeShipSummary(config, syncedTarget?.notion?.specPageUrl || target.notion?.specPageUrl || notionUrl, syncedTarget || target, shipPatch);
+  const syncedTargets = await loadShipSummaryTargets(config, notionUrl, Boolean(program && !spec));
+  await syncShipMetadataToNotion(config, notionUrl, syncedTargets.length ? syncedTargets : [target], shipPatch);
   console.log(`Ship metadata synced${prUrl ? `: ${prUrl}` : "."}`);
 }
 
-function printShipPreview({ projectRoot, projectPathspec, branch, message, changedFiles, collection, createPr, draft, baseBranch, prBody }) {
+function printShipPreview({ projectRoot, projectPathspec, branch, message, changedFiles, collection, repoUrl, publish, createPr, draft, baseBranch, prBody }) {
   console.log("Ship preview");
   console.log(`Project git root: ${projectRoot}`);
   console.log(`Project pathspec: ${projectPathspec}`);
   console.log(`Branch: ${branch}`);
+  console.log(`Remote: ${repoUrl || "none"}`);
   if (baseBranch) console.log(`Base branch: ${baseBranch}`);
   console.log(`Commit message: ${message}`);
   console.log(`Changed files: ${changedFiles.length}`);
@@ -4698,12 +4998,20 @@ function printShipPreview({ projectRoot, projectPathspec, branch, message, chang
       const count = report.changedFiles.length;
       console.log(`  ${report.task.id}: ${count} file${count === 1 ? "" : "s"}`);
     }
+    console.log("Before applying ship:");
+    for (const line of shipCollectNextLines(collection)) console.log(`  ${line}`);
   }
   console.log("Commands:");
   console.log(`  git -C ${projectRoot} switch -c ${branch}  # or switch existing branch`);
   console.log(`  git -C ${projectRoot} add -- ${projectPathspec}`);
   console.log(`  git -C ${projectRoot} commit -m ${JSON.stringify(message)}`);
-  console.log(`  git -C ${projectRoot} push -u origin ${branch}`);
+  if (repoUrl) {
+    console.log(`  git -C ${projectRoot} push -u origin ${branch}`);
+  } else if (publish) {
+    console.log(`  gh repo create <repo> --source ${projectRoot} --remote origin --push`);
+  } else {
+    console.log("  configure origin or rerun with --publish");
+  }
   if (createPr) {
     const draftFlag = draft ? "--draft " : "";
     const baseFlag = baseBranch ? `--base ${baseBranch} ` : "";
@@ -4712,7 +5020,74 @@ function printShipPreview({ projectRoot, projectPathspec, branch, message, chang
     console.log("Generated PR body:");
     console.log(prBody);
   }
+  if (!repoUrl && !publish) {
+    console.log("No origin remote configured. Rerun with --apply --publish to create a GitHub repo, or add origin manually first.");
+  }
   console.log("Dry run only. Rerun with --apply to create branch/commit/push.");
+}
+
+export function shipMissingRemoteMessage({ projectRoot, branch }) {
+  return [
+    "Ship stopped before commit because no origin remote is configured.",
+    "To create a GitHub repo and push this branch:",
+    "  build_fast ship --apply --publish",
+    "To choose the GitHub repo name:",
+    "  build_fast ship --apply --publish --repo <owner/name>",
+    "Or add a remote manually, then rerun ship:",
+    `  git -C ${projectRoot} remote add origin <git-url>`,
+    `  build_fast ship --apply --branch ${branch}`
+  ].join("\n");
+}
+
+async function publishGitHubRepo(projectRoot, branch, flags = {}) {
+  const repo = optionalString(flags, "repo", path.basename(projectRoot));
+  const visibility = flags.public === true || flags.public === "true"
+    ? "--public"
+    : flags.internal === true || flags.internal === "true"
+      ? "--internal"
+      : "--private";
+  const args = ["repo", "create", repo, "--source", projectRoot, "--remote", "origin", "--push", visibility];
+  try {
+    const { stdout, stderr } = await execFileAsync("gh", args, {
+      cwd: projectRoot,
+      timeout: 120000
+    });
+    const output = `${stdout || ""}\n${stderr || ""}`.trim();
+    if (output) console.log(output);
+    const remote = await gitRemoteUrl(projectRoot);
+    if (!remote) throw new Error("GitHub repo was created but origin remote was not configured.");
+    console.log(`Published ${branch} to ${remote}.`);
+    return remote;
+  } catch (error) {
+    throw new Error([
+      "GitHub repo publish failed.",
+      firstOutputLine(error.stderr || error.stdout || error.message),
+      "You can create the repo manually, add it as origin, then rerun `build_fast ship --apply`."
+    ].filter(Boolean).join("\n"));
+  }
+}
+
+function shipCollectNextLines(collection) {
+  if (!collection.reports.length) return [];
+  const task = collection.reports.length === 1
+    ? collection.reports[0].task
+    : collection.recommendation?.task;
+  if (task) {
+    return [
+      `build_fast collect --task ${task.id} --apply`,
+      "build_fast ship --apply"
+    ];
+  }
+  if (!collection.overlaps.length) {
+    return [
+      "build_fast collect --apply",
+      "build_fast ship --apply"
+    ];
+  }
+  return [
+    "build_fast collect --task <task-id> --apply",
+    "build_fast ship --apply"
+  ];
 }
 
 export function shipPrBody(spec, { changedFiles = [], bugs = [], repoUrl = "", notionUrl = "" } = {}) {
@@ -4782,6 +5157,17 @@ async function gitChangedFiles(projectRoot, pathspec, options = {}) {
   return [...new Set([...tracked, ...untracked])];
 }
 
+async function gitLastCommitFiles(projectRoot, pathspec) {
+  try {
+    return (await git(["-C", projectRoot, "show", "--name-only", "--format=", "HEAD", "--", pathspec]))
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function gitRemoteUrl(projectRoot) {
   try {
     return (await git(["-C", projectRoot, "remote", "get-url", "origin"])).trim();
@@ -4815,23 +5201,100 @@ async function saveShipMetadata({ config, notionUrl, spec, program, programSpec,
     return;
   }
   if (!program || !programSpec) return;
-  const updatedProgram = updateProgramSpec(program, programSpec.id, {
+  await saveProgram(config, notionUrl, applyProgramShipMetadata(program, shipPatch));
+}
+
+export function applyProgramShipMetadata(program, shipPatch) {
+  return {
+    ...program,
     status: "completed",
     ship: shipPatch,
     githubRepoUrl: shipPatch.repoUrl,
-    githubPrUrl: shipPatch.prUrl
-  });
-  await saveProgram(config, notionUrl, updatedProgram);
+    githubPrUrl: shipPatch.prUrl,
+    updatedAt: nowIso(),
+    specs: (program.specs || []).map((candidate) => ({
+      ...candidate,
+      status: "completed",
+      ship: shipPatch,
+      githubRepoUrl: shipPatch.repoUrl,
+      githubPrUrl: shipPatch.prUrl,
+      updatedAt: nowIso()
+    }))
+  };
 }
 
-async function loadShipSummaryTarget(config, notionUrl, programSpecId) {
-  if (!programSpecId) return loadSpec(config, notionUrl);
+async function loadShipSummaryTargets(config, notionUrl, programMode) {
+  if (!programMode) {
+    const loadedSpec = await loadSpec(config, notionUrl);
+    return loadedSpec ? [loadedSpec] : [];
+  }
   const program = await loadProgram(config, notionUrl);
-  const spec = program?.specs?.find((candidate) => candidate.id === programSpecId);
-  return program && spec ? programToStandaloneSpec(program, spec) : undefined;
+  return program?.specs?.length ? program.specs.map((candidate) => programToStandaloneSpec(program, candidate)) : [];
+}
+
+async function syncShipMetadataToNotion(config, notionUrl, specs, shipPatch) {
+  term.section("Notion Ship Sync");
+  if (!config.notionToken) {
+    term.warn("Skipped", "missing NOTION_API_TOKEN");
+    return;
+  }
+
+  const targets = Array.isArray(specs) ? specs.filter(Boolean) : [specs].filter(Boolean);
+  if (!targets.length) {
+    await writeShipSummary(config, notionUrl, undefined, shipPatch);
+    return;
+  }
+
+  const notion = new NotionClient({ token: config.notionToken, version: config.notionVersion });
+  let mapping = {};
+  try {
+    const schema = await loadOrInspectSchema(config, notionUrl);
+    mapping = resolveBuildFastDataSources(schema);
+  } catch (error) {
+    term.warn("Ship schema lookup skipped", error.message || String(error));
+  }
+
+  let synced = 0;
+  let fallbackWritten = false;
+  for (const spec of targets) {
+    const specPageId = spec?.notion?.specPageId;
+    if (!specPageId) {
+      if (!fallbackWritten) {
+        await writeShipSummary(config, notionUrl, spec, shipPatch);
+        fallbackWritten = true;
+      }
+      continue;
+    }
+
+    const shippedSpec = {
+      ...spec,
+      status: "completed",
+      ship: shipPatch,
+      githubRepoUrl: shipPatch.repoUrl,
+      githubPrUrl: shipPatch.prUrl
+    };
+    try {
+      if (mapping.specs) await notion.updatePage(specPageId, buildSpecProperties(shippedSpec, mapping.specs));
+    } catch (error) {
+      term.warn(`Ship properties skipped for ${spec.id || spec.title}`, error.message || String(error));
+    }
+    try {
+      await replaceManagedSection(notion, specPageId, "build_fast Ship", formatShipSummaryMarkdown(shippedSpec, shipPatch));
+      synced += 1;
+    } catch (error) {
+      term.warn(`Ship summary skipped for ${spec.id || spec.title}`, error.message || String(error));
+    }
+  }
+  if (synced) term.success("Synced", `${synced} ship metadata page${synced === 1 ? "" : "s"}`);
 }
 
 async function writeShipSummary(config, notionTarget, spec, shipPatch) {
+  const result = await writeToNotion(config, notionTarget, formatShipSummaryMarkdown(spec, shipPatch), { label: `ship ${spec?.title || "summary"}` });
+  if (result.ok) term.success("Synced", "ship summary");
+  else term.warn("Ship summary skipped", result.detail);
+}
+
+function formatShipSummaryMarkdown(spec, shipPatch) {
   const lines = [
     "## build_fast Ship",
     `Branch: ${shipPatch.branch}`,
@@ -4840,7 +5303,7 @@ async function writeShipSummary(config, notionTarget, spec, shipPatch) {
     shipPatch.prUrl ? `PR: ${shipPatch.prUrl}` : "PR: not created",
     `Shipped: ${shipPatch.shippedAt}`
   ].filter(Boolean);
-  await writeToNotion(config, notionTarget, lines.join("\n\n"), { label: `ship ${spec.title}` });
+  return lines.join("\n\n");
 }
 
 async function writeToNotion(config, notionUrl, markdown, options = {}) {

@@ -43,6 +43,12 @@ try {
   const planOutput = await cli(["plan", "--goal", "Smoke default config planning", "--no-agent"]);
   assert.match(planOutput, /Planned 1 tasks/);
 
+  const statusOutput = await cli(["status"]);
+  assert.match(statusOutput, /Smoke default config planning/);
+
+  const syncOutput = await cli(["sync"]);
+  assert.match(syncOutput, /missing NOTION_API_TOKEN/);
+
   const goOutput = await cli(["go", "--dry-run", "--no-agent"]);
   assert.match(goOutput, /Drive dry run/);
   assert.match(goOutput, /Concurrency: 3/);
