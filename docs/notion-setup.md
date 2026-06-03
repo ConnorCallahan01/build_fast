@@ -20,13 +20,16 @@ build_fast init --ntn "$NTN"
 
 If the page has no build_fast schema yet, init creates the required inline databases/data sources automatically. The same schema bootstrap also runs during `sync` and `drive`, so a blank parent page is a valid starting point.
 
+After `init`, commands run from the project directory use the saved Notion target by default, so `--ntn` is only needed when you want to override the target.
+
 ## 2. Created Schema
 
-The automatic setup creates three inline databases with primary data sources named:
+The automatic setup creates inline databases with primary data sources named:
 
 - `Specs`
 - `Spec Tasks`
 - `Bugs`
+- `User Tests`
 
 The CLI maps by data source name and required properties, not by the visual database block title.
 
@@ -78,6 +81,21 @@ Required properties:
 | `Created` | Created time | Automatic |
 | `Updated` | Last edited time | Automatic |
 
+### User Tests
+
+Required properties:
+
+| Property | Type | Notes |
+| --- | --- | --- |
+| `Name` | Title | User-test run id |
+| `Completed` | Date | Completed timestamp |
+| `Follow-up Tasks` | Relation | Relates to created follow-up task pages when available |
+| `Notes` | Text | Summary of pass/fail/tweak/skip counts |
+| `Project` | Text | Project path |
+| `Result` | Select | `passed`, `failed`, or `needs_tweaks` |
+| `Artifact` | Text | Local JSON artifact path |
+| `Run ID` | Text | Stable run id for upsert/dedupe |
+
 ## 3. Configure The Integration
 
 In Notion:
@@ -100,23 +118,25 @@ export NOTION_API_TOKEN=secret_...
 Inspect the page:
 
 ```bash
-node bin/build_fast.js inspect --ntn "$NTN"
+build_fast inspect
 ```
 
-You should see the three build_fast data sources and their properties. If `sync` cannot find the data sources, check the data source names and property names first.
+You should see the build_fast data sources and their properties. If `sync` cannot find the data sources, check the data source names and property names first.
 
 Run a sync after creating a goal or plan:
 
 ```bash
-node bin/build_fast.js sync --ntn "$NTN"
+build_fast sync
 ```
+
+`user-test` uses a fast sync path by default: it updates the User Tests data source and managed user-test summary sections without refreshing every spec/task page unless the pages do not exist yet or you pass `--full-sync`.
 
 ## Page Hygiene
 
 Task pages keep run history. To avoid long append-only pages:
 
 ```bash
-node bin/build_fast.js compact --ntn "$NTN" --keep-runs 1
+build_fast compact --keep-runs 1
 ```
 
 This keeps recent run history and refreshes managed snapshots.

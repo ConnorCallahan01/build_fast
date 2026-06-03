@@ -10,6 +10,9 @@ Autopilot:
 Permission profile:
 {{permissionProfile}}
 
+Agent alignment:
+{{agentProfile}}
+
 Spec:
 {{spec}}
 
@@ -37,4 +40,3 @@ Return only JSON. Do not wrap it in markdown.
   "blockers": ["only if blocked"],
   "followups": ["optional"]
 }
-

@@ -5,6 +5,8 @@ const DEFAULT_CONFIG = {
   defaultAgent: "claude",
   defaultAutopilot: "junior_mode",
   permissionProfile: "managed",
+  defaultPermissionMode: "",
+  dangerouslySkipPermissions: false,
   defaultParallel: "smart",
   defaultQa: "browser",
   defaultConcurrency: 4,
@@ -25,7 +27,7 @@ const DEFAULT_CONFIG = {
     permissionMode: {
       intern_mode: "plan",
       junior_mode: "acceptEdits",
-      boss_mode: "auto"
+      boss_mode: "bypassPermissions"
     }
   }
 };

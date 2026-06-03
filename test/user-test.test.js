@@ -50,6 +50,9 @@ try {
 
   const helpRun = await cli(["-h"]);
   assert.match(helpRun, /user-test/);
+  assert.match(helpRun, /Quick Start/);
+  assert.match(helpRun, /Claude Permissions/);
+  assert.match(helpRun, /Common Recovery/);
 
   const dryRun = await cli(["user-test", "--ntn", notionTarget, "--dry-run"]);
   assert.match(dryRun, /User Test/);
@@ -60,7 +63,8 @@ try {
   assert.match(passRun, /Result:\s+passed/);
   assert.match(passRun, /Notion Sync/);
   assert.match(passRun, /missing NOTION_API_TOKEN/);
-  assert.match(passRun, /build_fast ship/);
+  assert.match(passRun, /Recommended Next/);
+  assert.match(passRun, /Preview ship/);
   assert.doesNotMatch(passRun, /ship --ntn/);
 
   const runs = await readdir(path.join(specPath, "user-tests"));
@@ -87,7 +91,7 @@ try {
   const failRun = await cli(["user-test", "--ntn", notionTarget, "--create-tasks", "--fail-checks", "1", "--note", "Needs clearer copy"]);
   assert.match(failRun, /Result:\s+failed/);
   assert.match(failRun, /Created follow-up tasks/);
-  assert.match(failRun, /build_fast go/);
+  assert.match(failRun, /Repair follow-ups/);
   assert.doesNotMatch(failRun, /go --ntn/);
 
   const spec = await readJson(path.join(specPath, "spec.json"));

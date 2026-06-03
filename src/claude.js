@@ -7,6 +7,17 @@ export function permissionModeFor(config, autopilot) {
   return config.claude.permissionMode[autopilot] || config.claude.permissionMode.junior_mode || "acceptEdits";
 }
 
+export const CLAUDE_PERMISSION_MODES = ["default", "acceptEdits", "bypassPermissions", "plan"];
+
+export function normalizeClaudePermissionMode(value) {
+  const mode = String(value || "").trim();
+  if (!mode) return "";
+  if (!CLAUDE_PERMISSION_MODES.includes(mode)) {
+    throw new Error(`Unsupported Claude permission mode: ${mode}. Use one of: ${CLAUDE_PERMISSION_MODES.join(", ")}`);
+  }
+  return mode;
+}
+
 export function maxTurnsFor(config, autopilot) {
   return Number(config.claude.maxTurns[autopilot] || config.claude.maxTurns.junior_mode || 30);
 }
@@ -46,8 +57,12 @@ export async function writeManagedClaudeSettings(runDir, autopilot) {
   return filePath;
 }
 
-export async function runClaude({ config, prompt, projectDir, runDir, autopilot, permissionProfile, onStart }) {
+export async function runClaude({ config, prompt, projectDir, runDir, autopilot, permissionProfile, permissionMode = "", dangerouslySkipPermissions = false, onStart }) {
   await ensureDir(runDir);
+  const explicitPermissionMode = normalizeClaudePermissionMode(permissionMode);
+  if (dangerouslySkipPermissions && explicitPermissionMode) {
+    throw new Error("Use either --permission-mode or --dangerously-skip-permissions, not both.");
+  }
 
   const args = [
     "-p",
@@ -65,7 +80,11 @@ export async function runClaude({ config, prompt, projectDir, runDir, autopilot,
     args.push("--settings", settingsPath);
   }
 
-  if (permissionProfile !== "inherit") {
+  if (dangerouslySkipPermissions) {
+    args.push("--dangerously-skip-permissions");
+  } else if (explicitPermissionMode) {
+    args.push("--permission-mode", explicitPermissionMode);
+  } else if (permissionProfile !== "inherit") {
     args.push("--permission-mode", permissionModeFor(config, autopilot));
   }
 

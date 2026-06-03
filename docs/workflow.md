@@ -1,357 +1,195 @@
 # Workflow Guide
 
-The recommended loop is:
+`build_fast` is organized around one loop:
 
 ```text
-goal contract -> repo-aware plan -> Notion sync -> worker swarm -> collect -> feedback checks -> Notion sync
+align -> plan -> go -> user-test -> ship -> cleanup
 ```
 
-The failure recovery path is:
+Notion is the audit/control plane. The local git repo and worker worktrees are the implementation surface.
 
-```text
-feedback/QA failure
-  -> local bug ledger
-  -> pending bug-fix Spec Task
-  -> fresh worker worktree
-  -> collect + checks
-  -> Notion sync
-```
+## First-Time Setup
 
-## Recommended Workflow
-
-### 1. Shape The Goal
-
-Start with an interactive goal contract. This is the main human checkpoint before agents plan or write code.
+Initialize the project and save defaults:
 
 ```bash
-node bin/build_fast.js goal \
-  --goal "Add a small CLI demo mode that prints a sample workflow" \
-  --type feature \
-  --project /path/to/your/project \
-  --ntn "$NTN"
+build_fast init
 ```
 
-The CLI drafts a repo-aware contract, then asks:
-
-Before drafting, interactive terminals may ask targeted intake questions based on the work type. Use `--skip-questions` to bypass this and go straight to the goal contract.
-
-```text
-Goal contract actions:
-  a  approve and save
-  e  edit/refine
-  q  quit without saving
-```
-
-Edit mode supports:
-
-```text
-1  add refinement to final goal
-2  rewrite final goal
-3  add target change
-4  add acceptance criterion
-5  add out-of-scope note
-6  done editing
-```
-
-For automation or smoke tests, skip the prompt:
+Use `inherit` when workers should use your normal Claude Code global/project settings:
 
 ```bash
-node bin/build_fast.js goal \
-  --goal "..." \
-  --type feature \
-  --project /path/to/your/project \
-  --ntn "$NTN" \
-  --yes
+build_fast init --permission-profile inherit
 ```
 
-### 2. Drive The Full Loop
-
-After approving the goal:
+If you want a saved Claude permission override:
 
 ```bash
-node bin/build_fast.js drive \
-  --ntn "$NTN" \
-  --from-goal \
-  --parallel smart \
-  --qa browser \
-  --autopilot junior_mode \
-  --permission-profile managed \
-  --concurrency 2 \
-  --max-tasks 2
+build_fast init --permission-profile inherit --permission-mode bypassPermissions
 ```
 
-`drive` will:
+Then align agents once for the repo:
 
-- plan from the saved goal contract
-- scan the repo and feed project context into planning
-- sync spec/tasks to Notion
-- run dependency-ready tasks in worktrees
-- group ready tasks conservatively when `--parallel smart` is enabled
-- overlay completed dependency outputs into dependent task worktrees
-- collect the recommended integrated task
+```bash
+build_fast align
+```
+
+`align` writes managed guidance to `AGENTS.md` and `CLAUDE.md`, saves `.build_fast/agent-profile.json`, and includes that profile in future worker prompts. Existing manual content outside the managed section is preserved.
+
+## Starting Work
+
+For a fresh interactive plan:
+
+```bash
+build_fast plan
+```
+
+For a one-command start from a goal:
+
+```bash
+build_fast start --goal "Describe what you want built" --type feature
+```
+
+Use program mode for larger phased work:
+
+```bash
+build_fast plan --goal "Build the MVP in phases" --type project
+```
+
+Completed or shipped local specs/programs are not reused as the default goal, so bare `build_fast plan` starts a fresh interactive plan after a pipeline finishes.
+
+## Running The Build
+
+Preview first when you want to inspect orchestration:
+
+```bash
+build_fast go --dry-run
+```
+
+Run the default loop:
+
+```bash
+build_fast go
+```
+
+`go` uses defaults saved by `init`: Notion target, project, smart parallel, QA mode, concurrency, max tasks, and Claude permission behavior.
+
+During the loop, build_fast will:
+
+- sync local spec/task state to Notion
+- launch dependency-ready tasks in isolated worktrees
+- apply completed worktree output when safe
+- create integration tasks when parallel outputs overlap
 - run feedback checks
-- run browser QA when `--qa browser` is enabled
-- create a focused repair task when feedback checks fail, up to the configured repair limit
-- create `[bug]` tasks when final browser QA fails
-- sync final status back to Notion
+- create repair tasks for failed checks
+- run browser QA when configured
+- sync final state back to Notion
 
-Autopilot behavior:
+## Returning Later
 
-| Mode | Behavior |
-| --- | --- |
-| `junior_mode` | Available now; applies the recommended integrated task when clear and runs the bounded QA repair pass |
-| `intern_mode` | Planned; intended for more checkpoints before applying changes |
-| `boss_mode` | Planned; intended for more aggressive autonomous execution |
-
-## Smart Parallel Execution
-
-Use smart parallel mode when a spec has multiple independent tasks and you want faster worker throughput:
+Use pickup instead of guessing:
 
 ```bash
-node bin/build_fast.js drive \
-  --ntn "$NTN" \
-  --from-goal \
-  --parallel smart \
-  --concurrency 4 \
-  --max-tasks 4 \
-  --autopilot junior_mode \
-  --permission-profile managed
+build_fast pickup --status
 ```
 
-Smart mode uses three layers of protection:
+It shows the current pipeline state and a `Recommended Next` section. Most pipeline commands also print `Recommended Next` after finishing.
 
-- planner hints: `expectedFiles` and `parallelGroup`
-- local heuristics: high-risk, integration, final verification, and repair tasks are serialized
-- collect recovery: if parallel outputs overlap anyway, `drive` creates a serial integration task instead of choosing one output blindly
+## Human Acceptance
 
-The default mode remains unchanged. Use plain `drive` or `swarm` without `--parallel smart` when you want the existing dependency-ready batching behavior.
-
-### 3. Verify The Target Project
-
-Run the target project's checks yourself after `drive`:
+After implementation and automated checks:
 
 ```bash
-cd /path/to/your/project
-npm test
+build_fast user-test --run-setup
 ```
 
-Check build_fast state:
+If checks fail or need tweaks:
 
 ```bash
-node bin/build_fast.js status --ntn "$NTN"
+build_fast user-test --create-tasks
+build_fast go
 ```
 
-### 4. Clean Worktrees
+User-test sync is fast by default. It updates the User Tests data source and managed user-test sections without full spec/task refresh unless a first sync is needed or `--full-sync` is passed.
 
-After a successful run:
+## Shipping
+
+Preview the release handoff:
 
 ```bash
-node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
+build_fast ship
+```
+
+Apply branch/commit/push and optionally open a PR:
+
+```bash
+build_fast ship --apply --pr
+```
+
+If the repo has no `origin` yet:
+
+```bash
+build_fast ship --apply --publish
+```
+
+Program ships attach the same repo/PR metadata to every spec in the program so Notion has a clean audit trail.
+
+## Cleanup
+
+After a successful ship:
+
+```bash
+build_fast cleanup --apply --force --branches
 ```
 
 Without `--apply`, cleanup is a dry run.
 
-## Manual Workflow
+## Manual Controls
 
-Use this when you want control over each stage.
-
-Create a repo-aware plan directly:
+Inspect or apply worker outputs manually:
 
 ```bash
-node bin/build_fast.js plan \
-  --goal "..." \
-  --type feature \
-  --project /path/to/your/project \
-  --ntn "$NTN"
+build_fast collect
+build_fast collect --task task-003 --apply
+build_fast collect --task task-003 --patch
 ```
 
-Sync to Notion:
+Run lower-level workers directly:
 
 ```bash
-node bin/build_fast.js sync --ntn "$NTN"
+build_fast swarm --concurrency 2 --max-tasks 2 --parallel smart
 ```
 
-Run available tasks:
+Run status or sync:
 
 ```bash
-node bin/build_fast.js swarm \
-  --ntn "$NTN" \
-  --concurrency 2 \
-  --max-tasks 2 \
-  --autopilot junior_mode \
-  --permission-profile managed
+build_fast status
+build_fast sync
 ```
 
-Repeat `swarm` until no pending tasks remain.
+## Claude Permissions
 
-Inspect worktree outputs:
+Use inherited settings when you want workers to behave like Claude Code launched by you:
 
 ```bash
-node bin/build_fast.js collect --ntn "$NTN"
+build_fast go --permission-profile inherit
 ```
 
-Apply the recommended task:
+Override per run:
 
 ```bash
-node bin/build_fast.js collect --ntn "$NTN" --task task-003 --apply
+build_fast go --permission-profile inherit --permission-mode bypassPermissions
+build_fast go --permission-profile inherit --dangerously-skip-permissions
 ```
 
-If multiple tasks changed the same file, `collect --apply` refuses by default and prints a recommendation. You can override with `--force`, but choosing the recommended task is usually safer.
+`--permission-mode` accepts Claude Code's documented values: `default`, `acceptEdits`, `bypassPermissions`, and `plan`. Do not combine `--permission-mode` with `--dangerously-skip-permissions`.
 
-Preview a patch before applying:
+## Common Recovery
 
 ```bash
-node bin/build_fast.js collect --ntn "$NTN" --task task-003 --patch
+build_fast pickup --status
+build_fast collect --task <task-id> --apply
+build_fast go
+build_fast user-test --create-tasks
+build_fast cleanup --apply --force --branches
 ```
-
-## Program Workflow
-
-Use program mode for larger goals that should become multiple specs/phases:
-
-```bash
-node bin/build_fast.js program \
-  --goal "Build the MVP in phases" \
-  --project /path/to/your/project \
-  --ntn "$NTN"
-```
-
-Then drive the program:
-
-```bash
-node bin/build_fast.js drive \
-  --ntn "$NTN" \
-  --type project \
-  --autopilot junior_mode
-```
-
-Program mode runs one dependency-ready spec at a time. Later specs receive the current target project snapshot so they can build on earlier collected output.
-
-## Feedback Repair
-
-When automated feedback checks fail, `drive` creates a new pending repair task instead of only stopping with an error. The repair task includes:
-
-- failed command
-- captured output/error detail
-- instructions to make the smallest coherent fix
-- acceptance criteria requiring the failed checks to pass
-
-Then rerun `drive`:
-
-```bash
-node bin/build_fast.js drive --ntn "$NTN" --autopilot junior_mode
-```
-
-The default repair limit is 2 attempts per spec. Override it with:
-
-```bash
-node bin/build_fast.js drive --ntn "$NTN" --max-repairs 3
-```
-
-Manual/browser/server checks are filtered from automated feedback where possible. Keep truly manual QA in the spec or Notion page, then verify it yourself after `drive`.
-
-## Browser QA And Final Bug Pass
-
-Use this after a UI/demo-oriented run. The current browser QA MVP assumes the target project has an `npm run demo` script that starts a local static server and honors the `PORT` environment variable.
-
-```bash
-node bin/build_fast.js qa --ntn "$NTN" --type browser
-```
-
-To make browser QA part of the main drive loop:
-
-```bash
-node bin/build_fast.js drive --ntn "$NTN" --qa browser
-```
-
-For rendered Chromium checks, first verify Playwright setup:
-
-```bash
-node bin/build_fast.js qa-setup --ntn "$NTN"
-```
-
-Install missing Playwright pieces explicitly:
-
-```bash
-node bin/build_fast.js qa-setup --ntn "$NTN" --install
-```
-
-If final QA fails, `drive` logs the failures to the bug ledger, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode`, it automatically runs one fresh bug-worker repair cycle by default, applies the output when safe, and reruns browser QA. With `--max-qa-repairs 0`, it stops after creating the repair tasks.
-
-If the Notion page has a `Bugs` data source, bug ledger entries are also synced as Notion bug rows with relations back to the matching Spec and repair Task pages when those page ids are known.
-
-The QA command starts the demo, waits for the page, fetches the HTML, and checks for:
-
-- a valid HTML page
-- expected form/list/search/tag anchors
-- a module script for the browser app
-- served core and app JavaScript modules
-- linked stylesheet/script assets resolved from the served page URL, with `200` responses and CSS/JavaScript MIME types
-- rendered Chromium checks when `playwright` is installed, including console/page errors, rendered selector/text checks, and configured interaction steps
-
-Plans can include a `browserQa` profile to make these checks project-specific:
-
-```json
-{
-  "startCommand": "npm run demo",
-  "url": "http://127.0.0.1:${PORT}/",
-  "requiredText": ["Orbit Notes"],
-  "requiredSelectors": ["#create-form", "#notes-list"],
-  "requiredAssets": true,
-  "requiredModules": ["/demo/app.js"],
-  "manualChecks": ["Create a note", "Search by text", "Filter by tag"],
-  "render": true,
-  "interactions": [
-    {
-      "name": "create note",
-      "steps": [
-        { "action": "fill", "selector": "#note-title", "value": "Launch plan" },
-        { "action": "click", "selector": "button[type='submit']" },
-        { "action": "expectText", "text": "Launch plan" }
-      ]
-    }
-  ]
-}
-```
-
-When no profile exists, `qa --type browser` falls back to the Orbit Notes fixture anchors so older local tests still work.
-
-Use `--require-playwright` when rendered QA must fail instead of skip if Playwright is not installed.
-
-If checks fail, bugs are logged locally:
-
-```bash
-node bin/build_fast.js bugs --ntn "$NTN"
-```
-
-Turn those bugs into Notion-backed repair work:
-
-```bash
-node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
-node bin/build_fast.js drive --ntn "$NTN" --autopilot junior_mode --permission-profile managed
-```
-
-You can combine QA failure logging and task creation:
-
-```bash
-node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
-```
-
-This gives failed UI/server checks their own fresh worker instances instead of asking the same worker to keep patching in place.
-
-## Status Dashboard
-
-```bash
-node bin/build_fast.js status --ntn "$NTN"
-```
-
-The dashboard shows:
-
-- spec title and status
-- project path
-- Notion spec URL
-- task counts
-- next runnable task
-- feedback loops
-- collect state and overlap warnings
-- task branch/worktree metadata
-- active workers

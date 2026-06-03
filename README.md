@@ -73,10 +73,30 @@ build_fast init --ntn "https://www.notion.so/your-page-id" --install-qa
 ```
 
 This starts an interactive setup flow with arrow-key choices, saves project defaults in `.build_fast/config.json`, checks Notion/Git/Claude Code, and optionally installs Playwright browser QA dependencies.
+To make future workers inherit your normal Claude Code global/project settings by default, initialize with:
+
+```bash
+build_fast init --permission-profile inherit
+```
+
+You can also save a default Claude permission override during init:
+
+```bash
+build_fast init --permission-profile inherit --permission-mode bypassPermissions
+```
+
 If the Notion parent page is blank, `init` creates the required build_fast data sources automatically.
 If the current folder is not a git repo, interactive init offers to run `git init`; non-interactive setup can pass `--init-git`. Init also ensures `.build_fast/` and `node_modules/` are listed in `.gitignore`.
 The banner animation only runs in a real TTY and can be disabled with `BUILD_FAST_ANIMATION=0`.
 After `init`, commands use the saved Notion page by default. Pass `--ntn` only when you want to override that target.
+
+Align the worker agents once per project:
+
+```bash
+build_fast align
+```
+
+`align` writes managed guidance to `AGENTS.md` and `CLAUDE.md`, saves structured preferences in `.build_fast/agent-profile.json`, and injects that profile into future worker prompts. Workers still inspect the current repo state each run; alignment captures durable expectations like design direction, guardrails, and verification habits.
 
 Create a plan:
 
@@ -85,6 +105,7 @@ build_fast plan
 ```
 
 For long goals, paste the full text into the interactive plan prompt and finish with `/done` on its own line.
+If the previous local spec/program is completed or shipped, bare `build_fast plan` starts a fresh interactive plan instead of reusing the old goal.
 
 Run the full agent loop:
 
@@ -101,13 +122,14 @@ build_fast status
 Clean worktrees after a successful run:
 
 ```bash
-build_fast cleanup --ntn "$NTN" --apply --force --branches
+build_fast cleanup --apply --force --branches
 ```
 
 ## Core Commands
 
 | Command | Purpose |
 | --- | --- |
+| `align` | Create durable repo/agent guidance for future workers |
 | `init` | Configure the current project, Notion target, worker harness, defaults, and QA setup |
 | `doctor` | Verify local tools, config, Notion token, and target page access |
 | `inspect` | Print Notion child databases/data sources and properties |
@@ -120,6 +142,8 @@ build_fast cleanup --ntn "$NTN" --apply --force --branches
 | `swarm` | Run dependency-ready tasks in isolated worktrees, optionally with smart parallel grouping |
 | `collect` | Inspect or apply completed task output |
 | `status` | Show spec, task, feedback, worker, and collect state |
+| `start` | Orient a new session or start from a goal |
+| `pickup` | Show where to resume after time away |
 | `compact` | Keep Notion task pages readable by refreshing managed snapshots |
 | `cleanup` | Remove recorded worktrees and branches |
 | `review` | Run a Claude-backed review prompt |
@@ -131,18 +155,30 @@ build_fast cleanup --ntn "$NTN" --apply --force --branches
 | `ship` | Preview or apply guarded branch/commit/push/PR handoff |
 | `workers` | List supported worker adapters |
 
+## Pipeline Nudges
+
+Most pipeline commands print a `Recommended Next` section at the end. Use it as the handoff from planning to `go`, from completed work to `user-test`, from passed acceptance to `ship`, and from ship to `cleanup`.
+
+```bash
+build_fast start
+build_fast pickup
+build_fast pickup --status
+```
+
+Bare `start` and `pickup` inspect the saved Notion target and local ledger, then recommend both how to continue the current pipeline and how to start new work. If you run `build_fast start --goal` without text, it stays in orientation mode and shows the exact `start --goal "..."` form to use. Add `--status` to supported commands when you want the full status report printed after the command finishes.
+
 ## Final QA And Bug Fix Pass
 
 After a feature/program run, use browser QA when the target project exposes a static demo through `npm run demo`:
 
 ```bash
-build_fast qa --ntn "$NTN" --type browser
+build_fast qa --type browser
 ```
 
-If QA fails, `build_fast` writes bugs to the local ledger for that Notion target:
+If QA fails, `build_fast` writes bugs to the local ledger for the active target:
 
 ```bash
-build_fast bugs --ntn "$NTN"
+build_fast bugs
 ```
 
 When the Notion page has a `Bugs` data source, `sync`, `qa`, and `drive --qa` upsert local bug ledger entries into Notion. The expected Bugs properties are `Name`, `Status`, `Source`, `Severity`, `Spec`, `Task`, `Local ID`, `Command`, `Artifact`, and `Details`.
@@ -150,14 +186,14 @@ When the Notion page has a `Bugs` data source, `sync`, `qa`, and `drive --qa` up
 Convert open bugs into normal pending Spec Tasks, sync them to Notion, then drive fresh workers to fix them:
 
 ```bash
-build_fast bugs --ntn "$NTN" --create-tasks
-build_fast drive --ntn "$NTN" --autopilot junior_mode --permission-profile managed
+build_fast bugs --create-tasks
+build_fast drive --autopilot junior_mode --permission-profile inherit
 ```
 
 For one-command QA-to-task creation:
 
 ```bash
-build_fast qa --ntn "$NTN" --type browser --create-task
+build_fast qa --type browser --create-task
 ```
 
 Browser QA fetches the served HTML, verifies expected UI anchors, resolves linked stylesheets/scripts the same way a browser does, and checks those assets return `200` with CSS/JavaScript MIME types. This catches broken paths like a page served at `/` linking to `./styles.css` when the stylesheet actually lives under `/demo/styles.css`. If `playwright` is installed in the project, QA also renders the page in Chromium, checks for console/page errors, verifies rendered selectors/text, and can run configured interaction steps. Use `--require-playwright` when rendered QA must be enforced instead of skipped.
@@ -165,19 +201,19 @@ Browser QA fetches the served HTML, verifies expected UI anchors, resolves linke
 Check Playwright readiness for rendered QA:
 
 ```bash
-build_fast qa-setup --ntn "$NTN"
+build_fast qa-setup
 ```
 
 Install missing Playwright pieces into the target project:
 
 ```bash
-build_fast qa-setup --ntn "$NTN" --install
+build_fast qa-setup --install
 ```
 
 Run browser QA automatically at the end of `drive`:
 
 ```bash
-build_fast drive --ntn "$NTN" --qa browser
+build_fast drive --qa browser
 ```
 
 If final QA fails, `drive` logs bugs, writes a JSON artifact under `.build_fast/specs/<target>/qa-artifacts/`, creates `[bug]` Spec Tasks, and syncs them to Notion. In `junior_mode`, `drive` automatically runs one QA repair pass by default, applies the fix output when safe, reruns QA, and then stops only if failures remain. Use `--max-qa-repairs 0` to only create bug tasks, or increase the limit for more retry cycles.
@@ -237,13 +273,12 @@ Use smart parallel mode when you want more agents running at once without blindl
 
 ```bash
 build_fast drive \
-  --ntn "$NTN" \
   --from-goal \
   --parallel smart \
   --concurrency 4 \
   --max-tasks 4 \
   --autopilot junior_mode \
-  --permission-profile managed
+  --permission-profile inherit
 ```
 
 In smart mode, planners include `expectedFiles` and `parallelGroup` hints. `swarm` uses those hints plus file/area heuristics to defer risky, high-risk, serial, or overlapping tasks. If completed parallel workers still overlap, `drive` creates a serial integration task so a fresh worker can merge the outputs deliberately.
@@ -251,10 +286,12 @@ In smart mode, planners include `expectedFiles` and `parallelGroup` hints. `swar
 Preview the orchestration before launching workers:
 
 ```bash
-build_fast drive --ntn "$NTN" --dry-run --parallel smart --concurrency 4 --max-tasks 4
+build_fast drive --dry-run --parallel smart --concurrency 4 --max-tasks 4
 ```
 
 The dry run prints plan-quality warnings, selected/deferred smart-parallel tasks, feedback checks, browser QA settings, and repair limits without syncing Notion or starting agents. `parallelGroup: "serial"` still forces one-at-a-time execution; other group names are treated as hints, so independent tasks with different groups can run together when their expected files do not overlap.
+
+Use `--permission-profile inherit` when you want workers to use your normal Claude Code global/project settings, as if you launched Claude yourself. Use `--permission-mode default|acceptEdits|bypassPermissions|plan` only when you want a per-run Claude permission override, or `--dangerously-skip-permissions` when you explicitly want Claude Code's skip-permission behavior for that run.
 
 ## Ship To GitHub
 
@@ -285,6 +322,7 @@ build_fast ship --apply --publish
 - `Specs`
 - `Spec Tasks`
 - `Bugs`
+- `User Tests`
 
 The CLI uses Notion API version `2026-03-11` by default and writes current Data Source schemas.
 
@@ -309,7 +347,7 @@ npm test
 Local planning without agents:
 
 ```bash
-node bin/build_fast.js goal \
+build_fast goal \
   --goal "Smoke test" \
   --type chore \
   --project /path/to/your/project \
@@ -317,7 +355,7 @@ node bin/build_fast.js goal \
   --no-agent \
   --yes
 
-node bin/build_fast.js drive --ntn local-smoke --from-goal --no-agent
+build_fast drive --ntn local-smoke --from-goal --no-agent
 ```
 
 ## Current Limits

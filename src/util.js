@@ -119,37 +119,118 @@ export function normalizeProject(project) {
 export function printHelp() {
   console.log(`build_fast
 
-Commands:
-  doctor
-  init   [--ntn <notion-url>] [--project <dir>] [--worker claude] [--install-qa] [--yes]
-  goal   --goal "..." [--ntn <notion-url>] [--project <dir>] --type <type> [--yes|--interactive]
-  program --goal "..." [--ntn <notion-url>] [--project <dir>] [--drive]
-  plan   [--goal "..."] [--ntn <notion-url>] [--project <dir>] [--type <type>]
-         [--no-agent for deterministic local planning]
-         Types: feature, bug, chore (single spec)
-                project, refactor, init, overhaul (multi-spec program)
-  tasks  [--ntn <notion-url>] [regenerates from an existing local spec]
-  start  --goal "..." [--ntn <notion-url>] [--project <dir>] --type <type> --autopilot junior_mode
-  drive  [--ntn <notion-url>] [--goal "..." | --from-goal] [--project <dir>] [--type <type>] [--parallel smart] [--dry-run] [--qa browser] [--max-qa-repairs 1]
-  go     [uses defaults saved by init; equivalent to drive with smart parallel/browser QA defaults]
-  run    [--ntn <notion-url>] [--autopilot intern_mode|junior_mode|boss_mode]
-  swarm  [--ntn <notion-url>] [--concurrency 2] [--max-tasks 2] [--parallel smart]
-  status [--ntn <notion-url>] [--spec spec-001]
-  sync   [--ntn <notion-url>] [--mode data-source|blocks]
-  compact [--ntn <notion-url>] [--keep-runs 1]
-  collect [--ntn <notion-url>] [--task task-003] [--apply] [--force] [--patch]
-  cleanup [--ntn <notion-url>] [--task task-003] [--apply] [--force] [--branches]
-  inspect [--ntn <notion-url>]
-  stop   [--ntn <notion-url>]
-  review [--ntn <notion-url>] --type pr_readiness [--create-tasks]
-  qa     [--ntn <notion-url>] --type browser [--create-task]
-  qa-setup [--project <dir> | --ntn <notion-url>] [--install] [--package-manager npm|pnpm|yarn|bun]
-  user-test [--ntn <notion-url>] [--run-setup] [--create-tasks] [--keep-running] [--no-sync] [--full-sync]
-  bugs   [--ntn <notion-url>] [--create-tasks]
-  ship   [--ntn <notion-url>] [--branch build-fast/name] [--apply] [--pr] [--publish] [--repo owner/name]
-  workers [--worker claude]
+Repo-aware agent workflow: align -> plan -> go -> user-test -> ship -> cleanup.
+Notion is the control plane; git/worktrees are the implementation surface.
 
-Compatibility aliases:
+Quick Start
+  build_fast init
+  build_fast align
+  build_fast plan
+  build_fast go
+  build_fast user-test --run-setup
+  build_fast ship
+  build_fast ship --apply --pr
+  build_fast cleanup --apply --force --branches
+
+Daily Commands
+  build_fast pickup --status       Show where to resume after time away.
+  build_fast start                 Orient yourself; shows current state and new-goal options.
+  build_fast start --goal "..."    Plan and enter the build pipeline from a new goal.
+  build_fast plan                  Interactive fresh plan. Completed/shipped work is not reused.
+  build_fast go                    Run the default drive loop saved by init.
+  build_fast status                Current spec/program, tasks, workers, collection state.
+
+Setup And Alignment
+  init   [--ntn <url>] [--project <dir>] [--install-qa] [--yes]
+         [--permission-profile inherit|managed]
+         [--permission-mode default|acceptEdits|bypassPermissions|plan]
+         [--dangerously-skip-permissions]
+         Saves project defaults in .build_fast/config.json.
+
+  align  [--project <dir>] [--yes]
+         Writes AGENTS.md, CLAUDE.md, and .build_fast/agent-profile.json.
+         CLAUDE.md imports AGENTS.md so Claude Code loads shared repo guidance.
+
+  doctor [--ntn <url>]             Check Node, Git, Claude, token, and Notion access.
+  inspect [--ntn <url>]            Inspect Notion child data sources and properties.
+
+Planning
+  plan    [--goal "..."] [--type feature|bug|chore|refactor|project|init|overhaul]
+          [--project <dir>] [--no-agent] [--status]
+          Single-spec types: feature, bug, chore, refactor.
+          Program-style types: project, init, overhaul.
+
+  program --goal "..." [--project <dir>] [--drive]
+          Plan a multi-spec phased program explicitly.
+
+  goal    --goal "..." [--type <type>] [--interactive]
+          Shape a goal contract before planning.
+
+Build Loop
+  drive  [--goal "..."] [--from-goal] [--type <type>] [--dry-run]
+         [--parallel smart] [--concurrency 4] [--max-tasks 5]
+         [--qa browser] [--max-qa-repairs 1] [--status]
+
+  go     Uses init defaults; equivalent to drive with saved smart parallel, QA,
+         concurrency, max task, Claude permission, and Notion defaults.
+
+  swarm  [--concurrency 2] [--max-tasks 2] [--parallel smart]
+         Lower-level worker launch for dependency-ready tasks.
+
+Review And Repair
+  qa       --type browser [--create-task] [--require-playwright]
+  review   --type pr_readiness [--create-tasks]
+  bugs     [--create-tasks]
+  user-test [--run-setup] [--create-tasks] [--keep-running]
+            [--no-sync] [--full-sync] [--status]
+          Human acceptance pass after go/QA. Passed user tests lead to ship.
+
+Collect, Ship, Cleanup
+  collect [--task task-003] [--apply] [--force] [--patch] [--status]
+          Inspect or apply completed worker worktree output.
+
+  ship    [--branch build-fast/name] [--apply] [--pr] [--ready]
+          [--publish] [--repo owner/name] [--base main] [--status]
+          Preview first; --apply creates branch/commit/push and optional PR.
+          Program ships attach repo/PR metadata to every program spec in Notion.
+
+  cleanup [--task task-003] [--apply] [--force] [--branches] [--status]
+          Remove recorded worktrees and optionally task branches after ship.
+
+State And Notion
+  status  [--spec spec-001]
+  pickup  [--status]
+  sync    [--mode data-source|blocks] [--status]
+  compact [--keep-runs 1]
+  stop
+
+Claude Permissions
+  --permission-profile inherit
+      Do not pass build_fast managed --settings or default permission mode.
+      Claude Code uses your normal global/project settings.
+
+  --permission-profile managed
+      Use build_fast temporary settings and autopilot permission defaults.
+
+  --permission-mode default|acceptEdits|bypassPermissions|plan
+      Pass Claude Code's permission mode for this run or save it during init.
+
+  --dangerously-skip-permissions
+      Pass Claude Code's skip-permissions flag. Cannot combine with --permission-mode.
+
+Notion Defaults
+  After init, --ntn is optional from the project directory.
+  Fast sync paths update changed build_fast-managed pages/sections; they do not
+  delete your existing Notion audit trail.
+
+Common Recovery
+  build_fast pickup --status
+  build_fast collect --task <task-id> --apply
+  build_fast go
+  build_fast user-test --create-tasks
+  build_fast cleanup --apply --force --branches
+
+Compatibility Aliases
   --goal implies plan
   --tasks implies plan
   --go implies run

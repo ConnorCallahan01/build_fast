@@ -16,33 +16,68 @@ node bin/build_fast.js <command>
 
 ```bash
 build_fast init --ntn "$NTN" --install-qa
-build_fast doctor --ntn "$NTN"
-build_fast inspect --ntn "$NTN"
+build_fast align
+build_fast doctor
+build_fast inspect
+build_fast start
+build_fast pickup
 build_fast status
 ```
 
-`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, smart parallel settings, and browser QA. Commands run from that project use the saved Notion page automatically; pass `--ntn` only to override it. The interactive wizard uses an orange animated banner and arrow-key selectors for choices. Claude Code and `junior_mode` are available now; Codex, OpenCode, `intern_mode`, and `boss_mode` are shown as planned and are not saved as active defaults yet. If the target Notion page is missing the build_fast schema, init creates the `Specs`, `Spec Tasks`, and `Bugs` data sources automatically unless you pass `--no-create-schema`. Pass `--init-git` to initialize a git repository non-interactively when one is missing. Set `BUILD_FAST_ANIMATION=0` to disable the banner animation.
+`init` saves defaults for the current project, Notion page, harness, autopilot, permission profile, Claude permission behavior, smart parallel settings, and browser QA. Commands run from that project use the saved Notion page automatically; pass `--ntn` only to override it. The interactive wizard uses an orange animated banner and arrow-key selectors for choices. Claude Code and `junior_mode` are available now; Codex, OpenCode, `intern_mode`, and `boss_mode` are shown as planned and are not saved as active defaults yet. If the target Notion page is missing the build_fast schema, init creates the `Specs`, `Spec Tasks`, `Bugs`, and `User Tests` data sources automatically unless you pass `--no-create-schema`. Pass `--init-git` to initialize a git repository non-interactively when one is missing. Set `BUILD_FAST_ANIMATION=0` to disable the banner animation.
+
+To make workers use your normal Claude Code global/project settings by default:
+
+```bash
+build_fast init --permission-profile inherit
+```
+
+To save a default per-run Claude permission override:
+
+```bash
+build_fast init --permission-profile inherit --permission-mode bypassPermissions
+```
+
+## Agent Alignment
+
+Run `align` once per project when you want durable worker guidance:
+
+```bash
+build_fast align
+build_fast align --yes
+```
+
+It writes managed sections to `AGENTS.md` and `CLAUDE.md`, saves `.build_fast/agent-profile.json`, and includes that profile in future worker prompts. Existing manual content in those markdown files is preserved outside the managed build_fast section.
+
+## Pipeline Nudges
+
+Pipeline commands print a `Recommended Next` section when there is an obvious follow-up command. `build_fast start` with no goal and `build_fast pickup` both inspect local state and show where to resume, while also showing how to start a new goal/program from the current project. `build_fast start --goal` without text stays in orientation mode and prints the correct `start --goal "..."` form. Add `--status` to supported commands when you want a full status report printed after the command completes.
+
+```bash
+build_fast start
+build_fast start --goal "..." --type feature
+build_fast pickup --status
+```
 
 ## Goal And Planning
 
 ```bash
-node bin/build_fast.js goal \
+build_fast goal \
   --goal "..." \
-  --ntn "$NTN" \
   --project /path/to/your/project \
   --type feature
 ```
 
 ```bash
-node bin/build_fast.js plan \
+build_fast plan \
   --goal "..." \
-  --ntn "$NTN" \
   --project /path/to/your/project \
   --type feature
 ```
 
 After `init`, you can also run `plan` with no flags and answer the prompts.
 The interactive goal prompt accepts pasted multi-line text. Finish the paste with `/done` on its own line, or use `/cancel` to abort that prompt.
+Completed or shipped local specs/programs are not reused as the default goal, so bare `build_fast plan` starts a fresh interactive plan after a pipeline finishes.
 
 Useful flags:
 
@@ -59,18 +94,16 @@ Useful flags:
 Use `program` for larger goals that should be split into multiple specs/phases:
 
 ```bash
-node bin/build_fast.js program \
+build_fast program \
   --goal "..." \
-  --ntn "$NTN" \
   --project /path/to/your/project
 ```
 
 Drive a program directly:
 
 ```bash
-node bin/build_fast.js program \
+build_fast program \
   --goal "..." \
-  --ntn "$NTN" \
   --project /path/to/your/project \
   --drive \
   --autopilot junior_mode
@@ -81,18 +114,17 @@ node bin/build_fast.js program \
 After `init`, use the friendly defaulted command:
 
 ```bash
-node bin/build_fast.js go
+build_fast go
 ```
 
 `go` runs `drive` using saved defaults.
 
 ```bash
-node bin/build_fast.js drive \
-  --ntn "$NTN" \
+build_fast drive \
   --from-goal \
   --parallel smart \
   --autopilot junior_mode \
-  --permission-profile managed \
+  --permission-profile inherit \
   --concurrency 2 \
   --max-tasks 2
 ```
@@ -109,13 +141,16 @@ Useful drive flags:
 | `--dry-run` | Preview orchestration, plan quality, selected tasks, deferred tasks, feedback checks, and QA settings without syncing or running workers |
 | `--strict-plan` | Treat plan-quality warnings as blockers before launching workers |
 | `--qa browser` | Run browser QA as the final drive pass; failures become bug-fix tasks |
+| `--permission-profile inherit` | Do not pass build_fast managed settings or default permission mode; let Claude Code load your normal global/project settings |
+| `--permission-profile managed` | Use build_fast's temporary managed Claude settings and autopilot permission defaults |
+| `--permission-mode default\|acceptEdits\|bypassPermissions\|plan` | Pass Claude Code's documented permission mode for this run; overrides the mode from settings |
+| `--dangerously-skip-permissions` | Pass Claude Code's documented skip-permissions flag for this run; cannot be combined with `--permission-mode` |
 
 You can also drive directly from a goal string:
 
 ```bash
-node bin/build_fast.js drive \
+build_fast drive \
   --goal "..." \
-  --ntn "$NTN" \
   --project /path/to/your/project \
   --type feature
 ```
@@ -123,61 +158,62 @@ node bin/build_fast.js drive \
 ## Worker Execution
 
 ```bash
-node bin/build_fast.js swarm \
-  --ntn "$NTN" \
+build_fast swarm \
   --concurrency 2 \
   --max-tasks 2 \
   --parallel smart \
   --autopilot junior_mode \
-  --permission-profile managed
+  --permission-profile inherit
 ```
 
 `--parallel smart` only changes which ready tasks are selected for a swarm batch. It does not change the worker runtime. Smart mode defers serial/high-risk/integration tasks, avoids known expected-file overlaps, and prints selected/deferred reasons before workers start. `parallelGroup: "serial"` forces serialization; other group names are treated as planner hints, not automatic blockers, so independent tasks with different groups can still run together.
+
+Use `--permission-profile inherit` when you want build_fast workers to behave most like a Claude session you launched yourself. In inherit mode, build_fast does not pass `--settings` or a default `--permission-mode`, so Claude Code can apply your normal settings hierarchy. Add `--permission-mode ...` only when you intentionally want a per-run override.
 
 ## Collect Output
 
 Dry run:
 
 ```bash
-node bin/build_fast.js collect --ntn "$NTN"
+build_fast collect
 ```
 
 Patch preview:
 
 ```bash
-node bin/build_fast.js collect --ntn "$NTN" --task task-003 --patch
+build_fast collect --task task-003 --patch
 ```
 
 Apply a task:
 
 ```bash
-node bin/build_fast.js collect --ntn "$NTN" --task task-003 --apply
+build_fast collect --task task-003 --apply
 ```
 
 Force an apply when you understand the overlap risk:
 
 ```bash
-node bin/build_fast.js collect --ntn "$NTN" --task task-003 --apply --force
+build_fast collect --task task-003 --apply --force
 ```
 
 ## Maintenance
 
 ```bash
-node bin/build_fast.js compact --ntn "$NTN" --keep-runs 1
-node bin/build_fast.js cleanup --ntn "$NTN" --apply --force --branches
-node bin/build_fast.js stop --ntn "$NTN"
+build_fast compact --keep-runs 1
+build_fast cleanup --apply --force --branches
+build_fast stop
 ```
 
 ## Reviews
 
 ```bash
-node bin/build_fast.js review --ntn "$NTN" --type pr_readiness
+build_fast review --type pr_readiness
 ```
 
 Create follow-up tasks from review findings:
 
 ```bash
-node bin/build_fast.js review --ntn "$NTN" --type pr_readiness --create-tasks
+build_fast review --type pr_readiness --create-tasks
 ```
 
 ## QA And Bug Ledger
@@ -185,25 +221,25 @@ node bin/build_fast.js review --ntn "$NTN" --type pr_readiness --create-tasks
 Run browser QA against the active spec/program project:
 
 ```bash
-node bin/build_fast.js qa --ntn "$NTN" --type browser
+build_fast qa --type browser
 ```
 
 Check whether the active target project is ready for rendered Playwright QA:
 
 ```bash
-node bin/build_fast.js qa-setup --ntn "$NTN"
+build_fast qa-setup
 ```
 
 Install missing Playwright package/browser files into the target project:
 
 ```bash
-node bin/build_fast.js qa-setup --ntn "$NTN" --install
+build_fast qa-setup --install
 ```
 
 Run browser QA automatically after `drive` completes feedback checks:
 
 ```bash
-node bin/build_fast.js drive --ntn "$NTN" --qa browser
+build_fast drive --qa browser
 ```
 
 When final QA fails, `drive` logs bugs, writes a JSON artifact, creates `[bug]` Spec Tasks, and syncs Notion. In `junior_mode`, it runs one automatic QA repair cycle by default, then reruns browser QA. With `--max-qa-repairs 0`, it stops after creating the bug tasks.
@@ -211,12 +247,6 @@ When final QA fails, `drive` logs bugs, writes a JSON artifact, creates `[bug]` 
 ## User Test
 
 Run a human acceptance pass after `go` and automated QA:
-
-```bash
-node bin/build_fast.js user-test
-```
-
-If `init` saved a default Notion page, the short form works from the project directory:
 
 ```bash
 build_fast user-test
@@ -272,19 +302,19 @@ Without a profile, QA falls back to the Orbit Notes fixture assumptions.
 Create bug-fix tasks immediately when QA fails:
 
 ```bash
-node bin/build_fast.js qa --ntn "$NTN" --type browser --create-task
+build_fast qa --type browser --create-task
 ```
 
 List logged bugs:
 
 ```bash
-node bin/build_fast.js bugs --ntn "$NTN"
+build_fast bugs
 ```
 
 Convert open bugs into pending Spec Tasks and sync them to Notion:
 
 ```bash
-node bin/build_fast.js bugs --ntn "$NTN" --create-tasks
+build_fast bugs --create-tasks
 ```
 
 The bug ledger is stored at `.build_fast/specs/<target>/bugs.json`. Browser QA failure artifacts are stored at `.build_fast/specs/<target>/qa-artifacts/` and are referenced in generated bug-task prompts. Bugs can become normal Spec Tasks for repair work, and they also sync to a Notion `Bugs` data source when one is present.
@@ -307,8 +337,8 @@ If the target Notion page has a `Bugs` data source, bug rows are also synced the
 ## Workers
 
 ```bash
-node bin/build_fast.js workers
-node bin/build_fast.js drive --ntn "$NTN" --from-goal --worker claude
+build_fast workers
+build_fast drive --from-goal --worker claude
 ```
 
 Claude Code is the only supported adapter today. Unsupported adapters fail clearly.
@@ -318,7 +348,7 @@ Claude Code is the only supported adapter today. Unsupported adapters fail clear
 Preview branch/commit/push/PR commands:
 
 ```bash
-node bin/build_fast.js ship --branch build-fast/my-feature --pr --base main
+build_fast ship --branch build-fast/my-feature --pr --base main
 ```
 
 The preview prints the target git root, pathspec, changed files, uncollected completed worktree output, commands it would run, and the generated PR body.
@@ -328,14 +358,14 @@ After a successful program ship, `build_fast cleanup --apply --force --branches`
 Apply the branch/commit/push flow and create a draft PR:
 
 ```bash
-node bin/build_fast.js ship --branch build-fast/my-feature --apply --pr --base main
+build_fast ship --branch build-fast/my-feature --apply --pr --base main
 ```
 
 If the project has no `origin` remote yet, publish it through GitHub CLI:
 
 ```bash
-node bin/build_fast.js ship --apply --publish
-node bin/build_fast.js ship --apply --publish --repo owner/name --public
+build_fast ship --apply --publish
+build_fast ship --apply --publish --repo owner/name --public
 ```
 
 `--publish` creates a private GitHub repo by default, configures it as `origin`, and pushes the ship branch. Use `--public` or `--internal` to change visibility.

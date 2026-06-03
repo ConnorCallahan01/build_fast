@@ -1,12 +1,12 @@
 import { execFile, spawn } from "node:child_process";
-import { appendFile, cp, mkdir, rm, realpath, readFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, rm, realpath, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig, ensureConfig, saveConfigPatch } from "./config.js";
-import { runClaude } from "./claude.js";
+import { normalizeClaudePermissionMode, runClaude } from "./claude.js";
 import { makeSpec, loadSpec, saveSpec, specDir, ledgerRoot, createRun, finishRun, savePrompt, nextPendingTask, updateTask, readActiveWorkers, writeActiveWorkers, attachNotionSpecPage, attachNotionTaskPage, isMultiSpecType, makeProgram, loadProgram, saveProgram, readyProgramSpecs, programToStandaloneSpec, updateProgramSpec } from "./ledger.js";
 import { checkNotionPage, inspectNotionPage, markdownBlocks, NotionClient, parseNotionId, pageTitle, notionRelation, notionRichText, notionStatus, notionTitle, notionUrl } from "./notion.js";
 import { renderPrompt } from "./prompts.js";
@@ -22,6 +22,8 @@ export async function dispatch(command, flags) {
       return init(flags);
     case "doctor":
       return doctor(flags);
+    case "align":
+      return align(flags);
     case "goal":
       return goal(flags);
     case "program":
@@ -30,8 +32,7 @@ export async function dispatch(command, flags) {
     case "tasks":
       return plan(flags);
     case "start":
-      await plan({ ...flags, skipIfExists: true });
-      return run(flags);
+      return start(flags);
     case "drive":
       return drive(flags);
     case "run":
@@ -41,6 +42,8 @@ export async function dispatch(command, flags) {
       return swarm(flags);
     case "status":
       return status(flags);
+    case "pickup":
+      return pickup(flags);
     case "sync":
       return sync(flags);
     case "compact":
@@ -102,6 +105,197 @@ async function commandCheck(name, args) {
   }
 }
 
+async function align(flags = {}) {
+  const config = await ensureConfig();
+  const project = normalizeProject(optionalString(flags, "project", config.defaultProject || process.cwd()));
+  const repoContext = await scanRepo(project);
+  const existing = await loadAgentProfile(project);
+  const yes = flags.yes === true || flags.yes === "true";
+  const interactive = process.stdin.isTTY && !yes;
+  const profile = interactive
+    ? await promptAgentProfile({ project, repoContext, existing })
+    : defaultAgentProfile({ project, repoContext, existing });
+
+  await writeAgentProfile(project, profile);
+  await writeAgentGuidanceFiles(project, profile, repoContext);
+  await saveConfigPatch({ agentProfilePath: path.join(project, ".build_fast", "agent-profile.json") });
+
+  term.section("Agent Align");
+  term.keyValue("Project", project);
+  term.keyValue("Profile", ".build_fast/agent-profile.json");
+  term.keyValue("Guidance", "AGENTS.md, CLAUDE.md");
+  printNextCommands([
+    ["Plan work", `${cliCommand()} plan`],
+    ["Start new goal", `${cliCommand()} start --goal "..." --type feature`],
+    ["Check status", `${cliCommand()} status`]
+  ]);
+}
+
+async function promptAgentProfile({ project, repoContext, existing }) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    term.heading("build_fast align", path.basename(project));
+    const projectOverview = await askLongText(rl, "What should agents know about this project?", existing.projectOverview || defaultProjectOverview(project, repoContext));
+    const agentMission = await askLongText(rl, "What should agents optimize for when working here?", existing.agentMission || "Make scoped, working changes that preserve existing behavior and keep the project easy to demo.");
+    const designDirection = await askLongText(rl, "What design or product direction should agents follow?", existing.designDirection || "");
+    const guardrails = await askLongText(rl, "What should agents avoid or treat carefully?", (existing.guardrails || []).join("\n") || defaultGuardrails().join("\n"));
+    const runbook = await askLongText(rl, "How should agents run and verify this project?", (existing.runbook || defaultRunbook(repoContext)).join("\n"));
+    return normalizeAgentProfile({
+      project,
+      projectOverview,
+      agentMission,
+      designDirection,
+      guardrails: splitLines(guardrails),
+      runbook: splitLines(runbook),
+      updatedAt: nowIso()
+    }, repoContext);
+  } finally {
+    rl.close();
+  }
+}
+
+function defaultAgentProfile({ project, repoContext, existing = {} }) {
+  return normalizeAgentProfile({
+    project,
+    projectOverview: existing.projectOverview || defaultProjectOverview(project, repoContext),
+    agentMission: existing.agentMission || "Make scoped, working changes that preserve existing behavior and keep the project easy to understand, verify, and ship.",
+    designDirection: existing.designDirection || "",
+    guardrails: existing.guardrails?.length ? existing.guardrails : defaultGuardrails(),
+    runbook: existing.runbook?.length ? existing.runbook : defaultRunbook(repoContext),
+    updatedAt: nowIso()
+  }, repoContext);
+}
+
+function normalizeAgentProfile(profile, repoContext) {
+  return {
+    version: 1,
+    project: profile.project,
+    projectOverview: String(profile.projectOverview || "").trim(),
+    agentMission: String(profile.agentMission || "").trim(),
+    designDirection: String(profile.designDirection || "").trim(),
+    guardrails: splitLines(profile.guardrails),
+    runbook: splitLines(profile.runbook),
+    detected: {
+      runtimes: repoContext.detected?.runtimes || [],
+      sourceDirs: repoContext.detected?.sourceDirs || [],
+      testDirs: repoContext.detected?.testDirs || [],
+      feedbackLoops: repoContext.detected?.feedbackLoops || []
+    },
+    updatedAt: profile.updatedAt || nowIso()
+  };
+}
+
+function defaultProjectOverview(project, repoContext) {
+  const name = repoContext.package?.name || path.basename(project);
+  const runtimes = repoContext.detected?.runtimes?.length ? ` Runtime: ${repoContext.detected.runtimes.join(", ")}.` : "";
+  return `${name} project.${runtimes}`.trim();
+}
+
+function defaultGuardrails() {
+  return [
+    "Read the relevant code before editing.",
+    "Keep changes scoped to the requested goal.",
+    "Preserve user changes and existing behavior.",
+    "Do not perform unrelated refactors.",
+    "Do not push, deploy, rotate secrets, mutate production data, or run destructive git commands unless explicitly requested."
+  ];
+}
+
+function defaultRunbook(repoContext) {
+  const loops = repoContext.detected?.feedbackLoops || [];
+  if (loops.length) return loops;
+  if (repoContext.package?.scripts?.test) return ["npm test"];
+  return ["Run the smallest relevant check for the changed files."];
+}
+
+async function loadAgentProfile(project) {
+  return readJson(path.join(project, ".build_fast", "agent-profile.json"), {});
+}
+
+async function writeAgentProfile(project, profile) {
+  await writeJson(path.join(project, ".build_fast", "agent-profile.json"), profile);
+}
+
+async function writeAgentGuidanceFiles(project, profile, repoContext) {
+  const content = formatAgentGuidance(profile, repoContext);
+  await writeManagedAgentFile(path.join(project, "AGENTS.md"), content);
+  await writeManagedAgentFile(path.join(project, "CLAUDE.md"), formatClaudeAgentGuidance());
+}
+
+async function writeManagedAgentFile(filePath, content) {
+  const start = "<!-- build_fast:agent-align:start -->";
+  const end = "<!-- build_fast:agent-align:end -->";
+  const block = `${start}\n${content.trim()}\n${end}\n`;
+  const existing = await pathExists(filePath) ? await readFile(filePath, "utf8") : "";
+  if (existing.includes(start) && existing.includes(end)) {
+    const pattern = new RegExp(`${escapeRegExp(start)}[\\s\\S]*?${escapeRegExp(end)}\\n?`);
+    await writeFile(filePath, existing.replace(pattern, block));
+    return;
+  }
+  const next = existing.trim() ? `${existing.trimEnd()}\n\n${block}` : block;
+  await writeFile(filePath, next);
+}
+
+function formatAgentGuidance(profile, repoContext) {
+  const feedback = profile.runbook.length ? profile.runbook : defaultRunbook(repoContext);
+  const guardrails = profile.guardrails.length ? profile.guardrails : defaultGuardrails();
+  const design = profile.designDirection ? [`## Design Direction`, "", profile.designDirection, ""] : [];
+  return [
+    "# Agent Alignment",
+    "",
+    "Generated by `build_fast align`. Keep this section current when project expectations change.",
+    "",
+    "## Project Overview",
+    "",
+    profile.projectOverview || defaultProjectOverview(profile.project, repoContext),
+    "",
+    "## Agent Mission",
+    "",
+    profile.agentMission,
+    "",
+    ...design,
+    "## Runbook",
+    "",
+    ...feedback.map((item) => `- ${item}`),
+    "",
+    "## Guardrails",
+    "",
+    ...guardrails.map((item) => `- ${item}`),
+    "",
+    "## build_fast Workflow",
+    "",
+    "- Use `build_fast pickup --status` to understand current pipeline state.",
+    "- Use `build_fast plan` for a new interactive spec, then `build_fast go` to run workers.",
+    "- Use `build_fast user-test --run-setup` before shipping when the build is demoable.",
+    "- Keep Notion/source labels and audit trail text clear when the project has provenance requirements."
+  ].join("\n");
+}
+
+function formatClaudeAgentGuidance() {
+  return [
+    "# Claude Code",
+    "",
+    "@AGENTS.md",
+    "",
+    "Claude Code should use the shared agent alignment above for project context, workflow, guardrails, and verification habits."
+  ].join("\n");
+}
+
+function splitLines(value) {
+  const items = Array.isArray(value) ? value : String(value || "").split("\n");
+  return items.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function start(flags = {}) {
+  const hasGoal = Boolean(optionalString(flags, "goal", "") || flags["from-goal"]);
+  if (hasGoal) return drive(flags);
+  return pickup({ ...flags, start: true });
+}
+
 async function init(flags = {}) {
   const existing = await ensureConfig();
   const yes = flags.yes === true || flags.yes === "true";
@@ -111,6 +305,10 @@ async function init(flags = {}) {
   let worker = optionalString(flags, "worker", existing.defaultAgent || "claude");
   let autopilot = optionalString(flags, "autopilot", existing.defaultAutopilot || "junior_mode");
   let permissionProfile = optionalString(flags, "permission-profile", existing.permissionProfile || "managed");
+  let permissionMode = normalizeClaudePermissionMode(optionalString(flags, "permission-mode", existing.defaultPermissionMode || ""));
+  const explicitDangerouslySkip = flags["dangerously-skip-permissions"] === true || flags["dangerously-skip-permissions"] === "true";
+  const disabledDangerouslySkip = flags["dangerously-skip-permissions"] === false || flags["dangerously-skip-permissions"] === "false";
+  let dangerouslySkipPermissions = explicitDangerouslySkip || (!disabledDangerouslySkip && Boolean(existing.dangerouslySkipPermissions));
   let concurrency = Number(optionalString(flags, "concurrency", String(existing.defaultConcurrency || 4)));
   let maxTasks = Number(optionalString(flags, "max-tasks", String(existing.defaultMaxTasks || concurrency || 5)));
   let qa = optionalString(flags, "qa", existing.defaultQa || "browser");
@@ -146,6 +344,15 @@ async function init(flags = {}) {
         { value: "managed", label: "managed", detail: "build_fast maps permissions by autopilot" },
         { value: "inherit", label: "inherit", detail: "use your harness defaults" }
       ]);
+      const modeChoice = await askChoice(rl, "Claude permission mode override", permissionMode || "inherit", [
+        { value: "inherit", label: "inherit", detail: "use Claude settings/defaults" },
+        { value: "default", label: "default", detail: "Claude standard permission checks" },
+        { value: "acceptEdits", label: "acceptEdits", detail: "auto-accept file edits" },
+        { value: "bypassPermissions", label: "bypassPermissions", detail: "Claude bypass permissions mode" },
+        { value: "plan", label: "plan", detail: "Claude read-only planning mode" }
+      ]);
+      permissionMode = modeChoice === "inherit" ? "" : modeChoice;
+      dangerouslySkipPermissions = permissionMode ? false : await askYesNo(rl, "Use Claude --dangerously-skip-permissions by default?", dangerouslySkipPermissions);
       term.section("Execution");
       concurrency = Number(await askDefault(rl, "Worker concurrency", String(concurrency || 4)));
       maxTasks = Number(await askDefault(rl, "Max tasks per swarm", String(maxTasks || concurrency || 5)));
@@ -165,10 +372,15 @@ async function init(flags = {}) {
     term.warn("Autopilot mode not ready", `${autopilot} is planned; saving junior_mode for now`);
     autopilot = "junior_mode";
   }
+  if (permissionMode && dangerouslySkipPermissions) {
+    throw new Error("Use either --permission-mode or --dangerously-skip-permissions, not both.");
+  }
   const patch = {
     defaultAgent: worker,
     defaultAutopilot: autopilot,
     permissionProfile,
+    defaultPermissionMode: permissionMode,
+    dangerouslySkipPermissions,
     defaultParallel: "smart",
     defaultQa: qa === "none" ? "" : qa,
     defaultConcurrency: Math.max(1, concurrency || 4),
@@ -183,6 +395,7 @@ async function init(flags = {}) {
   term.keyValue("project", project);
   term.keyValue("notion", notion || "not configured");
   term.keyValue("worker", `${worker} (${autopilot})`);
+  term.keyValue("permissions", permissionMode ? `${permissionProfile}, ${permissionMode}` : dangerouslySkipPermissions ? `${permissionProfile}, dangerously-skip-permissions` : permissionProfile);
   const checks = [
     await commandCheck("node", ["--version"]),
     await commandCheck("git", ["--version"]),
@@ -221,13 +434,17 @@ async function init(flags = {}) {
   if (installQa && patch.defaultQa === "browser") {
     await qaSetup({ project, install: true });
   } else if (patch.defaultQa === "browser") {
-    term.info("Browser QA", "run `node bin/build_fast.js qa-setup --install` to install Playwright");
+    term.info("Browser QA", `run \`${cliCommand()} qa-setup --install\` to install Playwright`);
   }
 
   term.success("Saved config", ".build_fast/config.json");
   term.section("Ready");
-  term.keyValue("plan work", `${cliCommand()} plan`);
-  term.keyValue("run loop", `${cliCommand()} go`);
+  if (!(await pathExists(path.join(project, ".build_fast", "agent-profile.json")))) {
+    term.keyValue("align agents", `${cliCommand()} align`);
+  }
+  term.keyValue("start", `${cliCommand()} start --goal "..." --type feature`);
+  term.keyValue("pickup", `${cliCommand()} pickup`);
+  term.keyValue("status", `${cliCommand()} status`);
 }
 
 async function initGitCheck(project, options = {}) {
@@ -416,7 +633,8 @@ async function goal(flags) {
       projectDir: project,
       runDir,
       autopilot: "intern_mode",
-      permissionProfile: "inherit"
+      permissionProfile: "inherit",
+      ...claudePermissionOptions(flags, config)
     });
     contract = normalizeGoalContract(result.parsed, shapedGoal, repoContext);
   }
@@ -443,7 +661,7 @@ async function goal(flags) {
   }
   await writeJson(goalPath(config, notionUrl), finalContract);
   console.log(`\nSaved goal contract: ${path.relative(process.cwd(), goalPath(config, notionUrl))}`);
-  console.log(`Run it with: node bin/build_fast.js drive --ntn <page> --from-goal --autopilot junior_mode --permission-profile managed`);
+  console.log(`Run it with: ${cliCommand()} drive --from-goal --autopilot junior_mode --permission-profile inherit`);
 }
 
 async function program(flags) {
@@ -661,12 +879,14 @@ async function plan(flags) {
   if (isMultiSpecType(type)) return planProgram({ config, notionUrl, type, project, flags });
 
   const existing = await loadSpec(config, notionUrl);
-  let goal = optionalString(flags, "goal", existing?.goal);
+  const explicitGoal = optionalString(flags, "goal", "");
+  const existingGoal = reusablePlanGoal(existing);
+  let goal = explicitGoal || (!process.stdin.isTTY ? existingGoal : "");
   if (!goal && process.stdin.isTTY && !(flags.yes === true || flags.yes === "true")) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
       term.heading("build_fast plan", path.basename(project));
-      goal = await askLongText(rl, "What do you want to build?", existing?.goal || "");
+      goal = await askLongText(rl, "What do you want to build?", existingGoal);
     } finally {
       rl.close();
     }
@@ -698,7 +918,8 @@ async function plan(flags) {
       projectDir: project,
       runDir,
       autopilot: "intern_mode",
-      permissionProfile: "inherit"
+      permissionProfile: "inherit",
+      ...claudePermissionOptions(flags, config)
     });
     generated = normalizePlan(result.parsed, goal, repoContext);
   }
@@ -723,16 +944,26 @@ async function plan(flags) {
 
   term.line(`Planned ${spec.tasks.length} tasks for: ${spec.title}`);
   term.line(`Local spec: .build_fast/specs/${spec.id}/spec.json`);
+  if (!flags.suppressNext) {
+    printNextCommands([
+      ["Resume build", `${cliCommand()} go`],
+      ["Preview run", `${cliCommand()} go --dry-run`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
+  }
+  await maybePrintStatus(flags, notionUrl);
 }
 
 async function planProgram({ config, notionUrl, type, project, flags }) {
   const existing = await loadProgram(config, notionUrl);
-  let goal = optionalString(flags, "goal", existing?.goal);
+  const explicitGoal = optionalString(flags, "goal", "");
+  const existingGoal = reusablePlanGoal(existing);
+  let goal = explicitGoal || (!process.stdin.isTTY ? existingGoal : "");
   if (!goal && process.stdin.isTTY && !(flags.yes === true || flags.yes === "true")) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
       term.heading("build_fast program", path.basename(project));
-      goal = await askLongText(rl, "What larger goal should be planned?", existing?.goal || "");
+      goal = await askLongText(rl, "What larger goal should be planned?", existingGoal);
     } finally {
       rl.close();
     }
@@ -753,7 +984,8 @@ async function planProgram({ config, notionUrl, type, project, flags }) {
       projectDir: project,
       runDir,
       autopilot: "intern_mode",
-      permissionProfile: "inherit"
+      permissionProfile: "inherit",
+      ...claudePermissionOptions(flags, config)
     });
     generated = normalizeProgramPlan(result.parsed, goal, repoContext);
   }
@@ -775,6 +1007,20 @@ async function planProgram({ config, notionUrl, type, project, flags }) {
     term.line(`  ${spec.id}: ${spec.title} — ${spec.tasks.length} tasks${depLabel}`);
   }
   term.line(`Local program: .build_fast/specs/${program.id}/program/program.json`);
+  if (!flags.suppressNext) {
+    printNextCommands([
+      ["Resume build", `${cliCommand()} go`],
+      ["Preview run", `${cliCommand()} go --dry-run`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
+  }
+  await maybePrintStatus(flags, notionUrl);
+}
+
+function reusablePlanGoal(target) {
+  if (!target?.goal) return "";
+  if (target.ship || target.status === "completed") return "";
+  return target.goal;
 }
 
 function normalizeProgramPlan(parsed, goal, repoContext = undefined) {
@@ -839,6 +1085,7 @@ async function run(flags) {
   const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot);
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "inherit");
+  const claudeOptions = claudePermissionOptions(flags, config);
   let spec = await loadSpec(config, notionUrl);
   if (!spec) throw new Error("No local spec found. Run `build_fast plan --goal ... --ntn ... --project ...` first.");
 
@@ -853,11 +1100,18 @@ async function run(flags) {
       await updateNotionSpecStatus(config, notionUrl, spec, "Shipped");
       await appendNotionSpecSnapshot(config, spec);
       console.log("Spec complete.");
+      printNextCommands([
+        ["Run user test", `${cliCommand()} user-test --run-setup`],
+        ["Preview ship", `${cliCommand()} ship`],
+        ["Check status", `${cliCommand()} status`]
+      ]);
+      await maybePrintStatus(flags, notionUrl);
       return;
     }
 
     const { run, dir } = await createRun(config, notionUrl, task);
-    const prompt = await renderPrompt("worker.md", { spec, task, autopilot, permissionProfile });
+    const agentProfile = await loadAgentProfile(spec.project);
+    const prompt = await renderPrompt("worker.md", { spec, task, autopilot, permissionProfile, agentProfile });
     await savePrompt(dir, prompt);
 
     console.log(`Running ${task.id}: ${task.title}`);
@@ -871,6 +1125,7 @@ async function run(flags) {
       runDir: dir,
       autopilot,
       permissionProfile,
+      ...claudeOptions,
       onStart: ({ pid }) => registerWorker(config, { runId: run.id, taskId: task.id, pid, status: "running", startedAt: nowIso() })
     });
 
@@ -884,6 +1139,12 @@ async function run(flags) {
     completedThisRun += 1;
     if (taskPatch.status !== "completed" || autopilot !== "boss_mode") {
       console.log(`${task.id} ${taskPatch.status}: ${taskPatch.summary || ""}`);
+      printNextCommands([
+        ["Resume build", `${cliCommand()} go`],
+        ["Check status", `${cliCommand()} status`],
+        ["Pickup later", `${cliCommand()} pickup`]
+      ]);
+      await maybePrintStatus(flags, notionUrl);
       return;
     }
   }
@@ -895,6 +1156,7 @@ async function drive(flags) {
   const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot || "junior_mode");
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "managed");
+  const claudeOptions = claudePermissionOptions(flags, config);
   const concurrency = optionalString(flags, "concurrency", String(config.defaultConcurrency || 2));
   const maxTasks = optionalString(flags, "max-tasks", String(config.defaultMaxTasks || concurrency));
   const parallel = optionalString(flags, "parallel", config.defaultParallel || "default");
@@ -908,7 +1170,7 @@ async function drive(flags) {
 
   const existingProgram = await loadProgram(config, notionUrl);
   if (isMultiSpecType(type) || existingProgram) {
-    return driveProgram({ config, notionUrl, goal: requestedGoal, type: existingProgram?.type || type, goalContract, flags, autopilot, permissionProfile, concurrency, maxTasks });
+    return driveProgram({ config, notionUrl, goal: requestedGoal, type: existingProgram?.type || type, goalContract, flags, autopilot, permissionProfile, claudeOptions, concurrency, maxTasks });
   }
 
   let spec = await loadSpec(config, notionUrl);
@@ -926,6 +1188,10 @@ async function drive(flags) {
 
   if (dryRun) {
     await printDriveDryRun({ target: spec, flags, autopilot, permissionProfile, concurrency, maxTasks, parallel });
+    printNextCommands([
+      ["Run build", `${cliCommand()} go`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
     return;
   }
 
@@ -939,9 +1205,14 @@ async function drive(flags) {
   });
 
   enforcePlanQuality(spec, flags);
-  await term.timed("Syncing Notion spec state", () => sync({ ntn: notionUrl }));
+  await term.timed("Syncing Notion spec state", () => sync({ ntn: notionUrl, suppressNext: true }));
   if (flags["no-agent"]) {
     console.log("Drive no-agent smoke complete after plan/sync.");
+    printNextCommands([
+      ["Run build", `${cliCommand()} go`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
+    await maybePrintStatus(flags, notionUrl);
     return;
   }
 
@@ -952,7 +1223,7 @@ async function drive(flags) {
     const pending = readyPendingTasks(spec);
     if (!pending.length) break;
     term.step(`Launching swarm batch ${iterations + 1}`);
-    await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks, parallel });
+    await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, ...claudeOptions, concurrency, "max-tasks": maxTasks, parallel });
     iterations += 1;
   }
 
@@ -973,14 +1244,14 @@ async function drive(flags) {
       const completedIntegration = completedIntegrationReport(collection);
       if (completedIntegration) {
         term.info(`Applying completed integration task ${completedIntegration.task.id}`, "it already resolves overlapping parallel outputs");
-        await collect({ ntn: notionUrl, task: completedIntegration.task.id, apply: true });
+        await collect({ ntn: notionUrl, task: completedIntegration.task.id, apply: true, suppressNext: true });
         return;
       }
       const integrated = addParallelIntegrationTask(spec, collection);
       if (integrated) {
         await saveSpec(config, notionUrl, integrated);
         console.log(`Created ${integrated.tasks.at(-1).id} to integrate overlapping parallel outputs. Rerun drive to continue.`);
-        await sync({ ntn: notionUrl });
+        await sync({ ntn: notionUrl, suppressNext: true });
         return;
       }
     }
@@ -988,7 +1259,7 @@ async function drive(flags) {
     const shouldApply = shouldDriveApply(autopilot, collection);
     if (shouldApply.apply) {
       term.info(`Applying ${shouldApply.taskId}`, shouldApply.reason);
-      await collect({ ntn: notionUrl, task: shouldApply.taskId, apply: true });
+      await collect({ ntn: notionUrl, task: shouldApply.taskId, apply: true, suppressNext: true });
     } else {
       term.warn("Drive stopped before collection apply", shouldApply.reason);
       return;
@@ -1008,7 +1279,7 @@ async function drive(flags) {
     if (repaired) {
       await saveSpec(config, notionUrl, repaired);
       console.log(`Created ${repaired.tasks.at(-1).id} to repair failed feedback checks. Rerun drive to continue.`);
-      await sync({ ntn: notionUrl });
+      await sync({ ntn: notionUrl, suppressNext: true });
       return;
     }
     throw new Error("Drive feedback checks failed.");
@@ -1016,13 +1287,19 @@ async function drive(flags) {
 
   refreshed = await resolveCompletedBugTasks(config, notionUrl, refreshed);
 
-  if (await runDriveQaFinalPass({ config, notionUrl, target: refreshed, flags, autopilot, permissionProfile, concurrency, maxTasks })) return;
+  if (await runDriveQaFinalPass({ config, notionUrl, target: refreshed, flags, autopilot, permissionProfile, claudeOptions, concurrency, maxTasks })) return;
 
-  await term.timed("Syncing Notion spec state", () => sync({ ntn: notionUrl }));
+  await term.timed("Syncing Notion spec state", () => sync({ ntn: notionUrl, suppressNext: true }));
   term.success("Drive complete");
+  printNextCommands([
+    ["Run user test", `${cliCommand()} user-test --run-setup`],
+    ["Preview ship", `${cliCommand()} ship`],
+    ["Check status", `${cliCommand()} status`]
+  ]);
+  await maybePrintStatus(flags, notionUrl);
 }
 
-async function driveProgram({ config, notionUrl, goal, type, goalContract, flags, autopilot, permissionProfile, concurrency, maxTasks }) {
+async function driveProgram({ config, notionUrl, goal, type, goalContract, flags, autopilot, permissionProfile, claudeOptions, concurrency, maxTasks }) {
   const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
   let program = await loadProgram(config, notionUrl);
   if (!program || (goal && goal !== program.goal)) {
@@ -1040,6 +1317,10 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
 
   if (dryRun) {
     await printDriveDryRun({ target: program, flags, autopilot, permissionProfile, concurrency, maxTasks, parallel: optionalString(flags, "parallel", "default") });
+    printNextCommands([
+      ["Run build", `${cliCommand()} go`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
     return;
   }
 
@@ -1057,6 +1338,11 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
   if (!completedAtStart) await term.timed("Syncing Notion program state", () => syncProgram({ config, notionUrl, program }));
   if (flags["no-agent"]) {
     console.log("Drive no-agent smoke complete after plan/sync.");
+    printNextCommands([
+      ["Run build", `${cliCommand()} go`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
+    await maybePrintStatus(flags, notionUrl);
     return;
   }
 
@@ -1098,7 +1384,7 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
       const pending = readyPendingTasks(currentSpec);
       if (!pending.length) break;
       term.step(`Launching swarm batch ${specIterations + 1} for ${nextSpec.id}`);
-      await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, concurrency, "max-tasks": maxTasks, parallel: optionalString(flags, "parallel", "default") });
+      await swarm({ ntn: notionUrl, autopilot, "permission-profile": permissionProfile, ...claudeOptions, concurrency, "max-tasks": maxTasks, parallel: optionalString(flags, "parallel", "default") });
       specIterations += 1;
     }
 
@@ -1214,9 +1500,15 @@ async function driveProgram({ config, notionUrl, goal, type, goalContract, flags
     await term.timed("Syncing final program state", () => syncProgram({ config, notionUrl, program }));
   }
 
-  if (await runDriveQaFinalPass({ config, notionUrl, target: programToStandaloneSpec(program, program.specs.at(-1)), flags, autopilot, permissionProfile, concurrency, maxTasks })) return;
+  if (await runDriveQaFinalPass({ config, notionUrl, target: programToStandaloneSpec(program, program.specs.at(-1)), flags, autopilot, permissionProfile, claudeOptions, concurrency, maxTasks })) return;
 
   console.log("Drive complete. All specs shipped.");
+  printNextCommands([
+    ["Run user test", `${cliCommand()} user-test --run-setup`],
+    ["Preview ship", `${cliCommand()} ship`],
+    ["Check status", `${cliCommand()} status`]
+  ]);
+  await maybePrintStatus(flags, notionUrl);
 }
 
 async function printDriveDryRun({ target, flags, autopilot, permissionProfile, concurrency, maxTasks, parallel }) {
@@ -1232,6 +1524,8 @@ async function printDriveDryRun({ target, flags, autopilot, permissionProfile, c
   console.log(`Project: ${target.project}`);
   console.log(`Autopilot: ${autopilot}`);
   console.log(`Permission profile: ${permissionProfile}`);
+  const claudeOptions = claudePermissionOptions(flags, await loadConfig());
+  console.log(`Claude permissions: ${claudeOptions.dangerouslySkipPermissions ? "dangerously-skip-permissions" : claudeOptions.permissionMode || "settings/default"}`);
   console.log(`Parallel: ${parallel}`);
   console.log(`Concurrency: ${concurrency}`);
   console.log(`Max tasks per swarm: ${maxTasks}`);
@@ -1453,7 +1747,7 @@ function addFeedbackRepairTask(spec, checks, flags = {}) {
   };
 }
 
-async function runDriveQaFinalPass({ config, notionUrl, target, flags, autopilot, permissionProfile, concurrency, maxTasks }) {
+async function runDriveQaFinalPass({ config, notionUrl, target, flags, autopilot, permissionProfile, claudeOptions = {}, concurrency, maxTasks }) {
   const qaType = flags.qa === true ? "browser" : optionalString(flags, "qa", "");
   if (!qaType) return false;
   if (qaType !== "browser") throw new Error(`Unsupported drive QA type: ${qaType}. Current MVP supports --qa browser.`);
@@ -1495,7 +1789,7 @@ async function runDriveQaFinalPass({ config, notionUrl, target, flags, autopilot
     }
 
     console.log(`Created ${updated.tasks.at(-1).id} from final browser QA failures. Running QA bug repair workers.`);
-    const repaired = await runQaRepairCycle({ config, notionUrl, flags, autopilot, permissionProfile, concurrency, maxTasks });
+    const repaired = await runQaRepairCycle({ config, notionUrl, flags, autopilot, permissionProfile, claudeOptions, concurrency, maxTasks });
     if (!repaired.continueQa) return true;
     currentTarget = repaired.target || await loadSpec(config, notionUrl);
     attempt += 1;
@@ -1512,11 +1806,12 @@ function driveShouldAutoRepairQa(autopilot) {
   return autopilot === "junior_mode" || autopilot === "boss_mode";
 }
 
-async function runQaRepairCycle({ config, notionUrl, flags, autopilot, permissionProfile, concurrency, maxTasks }) {
+async function runQaRepairCycle({ config, notionUrl, flags, autopilot, permissionProfile, claudeOptions = {}, concurrency, maxTasks }) {
   await swarm({
     ntn: notionUrl,
     autopilot,
     "permission-profile": permissionProfile,
+    ...claudeOptions,
     concurrency,
     "max-tasks": maxTasks,
     parallel: optionalString(flags, "parallel", "default")
@@ -1747,12 +2042,24 @@ function validateWorkerFlag(flags) {
   }
 }
 
+function claudePermissionOptions(flags = {}, config = {}) {
+  const permissionMode = normalizeClaudePermissionMode(optionalString(flags, "permission-mode", optionalString(flags, "permissionMode", config.defaultPermissionMode || "")));
+  const explicitDangerouslySkip = flags["dangerously-skip-permissions"] === true || flags["dangerously-skip-permissions"] === "true" || flags.dangerouslySkipPermissions === true || flags.dangerouslySkipPermissions === "true";
+  const explicitlyDisabledDangerouslySkip = flags["dangerously-skip-permissions"] === false || flags["dangerously-skip-permissions"] === "false" || flags.dangerouslySkipPermissions === false || flags.dangerouslySkipPermissions === "false";
+  const dangerouslySkipPermissions = explicitDangerouslySkip || (!explicitlyDisabledDangerouslySkip && Boolean(config.dangerouslySkipPermissions));
+  if (permissionMode && dangerouslySkipPermissions) {
+    throw new Error("Use either --permission-mode or --dangerously-skip-permissions, not both.");
+  }
+  return { permissionMode, dangerouslySkipPermissions };
+}
+
 async function swarm(flags) {
   const config = await loadConfig();
   validateWorkerFlag(flags);
   const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const autopilot = optionalString(flags, "autopilot", config.defaultAutopilot);
   const permissionProfile = optionalString(flags, "permission-profile", config.permissionProfile || "inherit");
+  const claudeOptions = claudePermissionOptions(flags, config);
   const concurrency = Math.max(1, Number(optionalString(flags, "concurrency", "2")));
   const maxTasks = Math.max(1, Number(optionalString(flags, "max-tasks", String(concurrency))));
   const parallelMode = optionalString(flags, "parallel", "default");
@@ -1796,7 +2103,7 @@ async function swarm(flags) {
     printSmartParallelAnalysis({ ...smartAnalysis, selected: candidates }, "  ");
   }
   const results = await runWithConcurrency(assignments, concurrency, (assignment) =>
-    runSwarmAssignment({ config, notionUrl, autopilot, permissionProfile, assignment })
+    runSwarmAssignment({ config, notionUrl, autopilot, permissionProfile, claudeOptions, assignment })
   );
 
   let latest = await loadSpec(config, notionUrl);
@@ -1972,9 +2279,10 @@ function printSmartParallelAnalysis(analysis, indent = "") {
   }
 }
 
-async function runSwarmAssignment({ config, notionUrl, autopilot, permissionProfile, assignment }) {
+async function runSwarmAssignment({ config, notionUrl, autopilot, permissionProfile, claudeOptions = {}, assignment }) {
   const { task, workerProjectDir } = assignment;
   const { run, dir } = await createRun(config, notionUrl, task);
+  const agentProfile = await loadAgentProfile(assignment.spec.project);
   const prompt = await renderPrompt("worker.md", {
     spec: {
       ...assignment.spec,
@@ -1991,7 +2299,8 @@ async function runSwarmAssignment({ config, notionUrl, autopilot, permissionProf
       worktree: assignment.worktreeDir
     },
     autopilot,
-    permissionProfile
+    permissionProfile,
+    agentProfile
   });
   await savePrompt(dir, prompt);
 
@@ -2002,6 +2311,7 @@ async function runSwarmAssignment({ config, notionUrl, autopilot, permissionProf
     runDir: dir,
     autopilot,
     permissionProfile,
+    ...claudeOptions,
     onStart: ({ pid }) =>
       registerWorker(config, {
         runId: run.id,
@@ -2283,6 +2593,209 @@ async function status(flags) {
   }
 }
 
+async function pickup(flags = {}) {
+  const config = await loadConfig();
+  const label = flags.start ? "Start" : "Pickup";
+  let notionUrl = "";
+  try {
+    notionUrl = await resolveDefaultNotionUrl(config, flags);
+  } catch {
+    term.section(label);
+    term.line("No build_fast workspace is configured for this project yet.");
+    printNextCommands([
+      ["Initialize", `${cliCommand()} init`],
+      ["Start from a goal", `${cliCommand()} start --goal "..." --type feature`],
+      ["Check setup", `${cliCommand()} doctor`]
+    ]);
+    return;
+  }
+
+  const workers = await readActiveWorkers(config);
+  const program = await loadProgram(config, notionUrl);
+  const spec = program ? undefined : await loadSpec(config, notionUrl);
+
+  term.section(label);
+  term.keyValue("Notion", notionUrl);
+  term.keyValue("Project", program?.project || spec?.project || config.defaultProject || process.cwd());
+  if (flags.start && flags.goal === true) {
+    term.warn("Goal not provided", `use ${cliCommand()} start --goal "..." --type feature`);
+  }
+
+  if (!program && !spec) {
+    term.line("No local spec or program was found.");
+    printNextCommands([
+      ["Start new goal", `${cliCommand()} start --goal "..." --type feature`],
+      ["Plan a program", `${cliCommand()} program --goal "..."`],
+      ["Run setup", `${cliCommand()} init`]
+    ]);
+    return;
+  }
+
+  const recommendation = await recommendNextStep({ config, notionUrl, program, spec, workers });
+  term.keyValue("Current", recommendation.current);
+  term.keyValue("State", recommendation.state);
+  if (recommendation.detail) term.keyValue("Why", recommendation.detail);
+  printNextCommands(recommendation.commands);
+  await maybePrintStatus(flags, notionUrl);
+}
+
+async function recommendNextStep({ config, notionUrl, program, spec, workers = [] }) {
+  if (workers.length) {
+    return {
+      current: `${workers.length} active worker${workers.length === 1 ? "" : "s"}`,
+      state: "work is running",
+      detail: "Let active workers finish before collecting or shipping.",
+      commands: [
+        ["Watch status", `${cliCommand()} status`],
+        ["Stop workers", `${cliCommand()} stop`]
+      ]
+    };
+  }
+  if (program) return recommendProgramNextStep({ config, notionUrl, program });
+  return recommendSpecNextStep({ config, notionUrl, spec });
+}
+
+async function recommendProgramNextStep({ config, notionUrl, program }) {
+  const activeSpec = await loadSpec(config, notionUrl);
+  if (activeSpec) {
+    const collection = await collectSummary(config, notionUrl, activeSpec, undefined, { uncollectedOnly: true, skipMissing: true });
+    if (collection.reports.length) {
+      const task = collection.recommendation?.task || collection.reports[0].task;
+      return {
+        current: `${program.title} [${program.status}]`,
+        state: "completed worker output is ready to collect",
+        detail: collection.overlaps.length ? "Overlapping changed files need an explicit collection choice." : "Collected output should be applied before the next run or ship.",
+        commands: withNewWorkCommands([
+          ["Collect output", `${cliCommand()} collect --task ${task.id} --apply`],
+          ["Check status", `${cliCommand()} status`]
+        ])
+      };
+    }
+  }
+
+  const ready = readyProgramSpecs(program);
+  const taskProgress = programTaskCounts(program);
+  if (ready.length || taskProgress.pending || taskProgress.failed || taskProgress.inProgress) {
+    return {
+      current: `${program.title} [${program.status}]`,
+      state: `${taskProgress.completed}/${taskProgress.total} tasks completed`,
+      detail: ready.length ? `Next spec is ${ready[0].id}: ${ready[0].title}.` : "There is unfinished program work.",
+      commands: withNewWorkCommands([
+        ["Resume build", `${cliCommand()} go`],
+        ["Preview run", `${cliCommand()} go --dry-run`],
+        ["Check status", `${cliCommand()} status`]
+      ])
+    };
+  }
+
+  if (!program.ship) {
+    return {
+      current: `${program.title} [completed]`,
+      state: "ready for acceptance test and ship",
+      detail: "The build is complete locally but has not been shipped yet.",
+      commands: withNewWorkCommands([
+        ["Run user test", `${cliCommand()} user-test --run-setup`],
+        ["Preview ship", `${cliCommand()} ship`],
+        ["Check status", `${cliCommand()} status`]
+      ])
+    };
+  }
+
+  return {
+    current: `${program.title} [shipped]`,
+    state: "ship metadata recorded",
+    detail: program.githubPrUrl || program.githubRepoUrl || "The program has a recorded ship.",
+    commands: withNewWorkCommands([
+      ["Clean worktrees", `${cliCommand()} cleanup --apply --force --branches`],
+      ["Check status", `${cliCommand()} status`]
+    ])
+  };
+}
+
+async function recommendSpecNextStep({ config, notionUrl, spec }) {
+  if (!spec) {
+    return {
+      current: "none",
+      state: "no active work",
+      detail: "",
+      commands: [
+        ["Plan a feature", `${cliCommand()} plan --goal "..."`],
+        ["Check status", `${cliCommand()} status`]
+      ]
+    };
+  }
+
+  const collection = await collectSummary(config, notionUrl, spec, undefined, { uncollectedOnly: true, skipMissing: true });
+  if (collection.reports.length) {
+    const task = collection.recommendation?.task || collection.reports[0].task;
+    return {
+      current: `${spec.title} [${spec.status}]`,
+      state: "completed worker output is ready to collect",
+      detail: collection.overlaps.length ? "Overlapping changed files need an explicit collection choice." : "Collected output should be applied before the next run or ship.",
+      commands: withNewWorkCommands([
+        ["Collect output", `${cliCommand()} collect --task ${task.id} --apply`],
+        ["Check status", `${cliCommand()} status`]
+      ])
+    };
+  }
+
+  const counts = taskCounts(spec);
+  const next = readyPendingTasks(spec)[0];
+  if (counts.pending || counts.failed || counts.inProgress) {
+    return {
+      current: `${spec.title} [${spec.status}]`,
+      state: `${counts.completed}/${counts.total} tasks completed`,
+      detail: next ? `Next task is ${next.id}: ${next.title}.` : "There is unfinished task work.",
+      commands: withNewWorkCommands([
+        ["Resume build", `${cliCommand()} go`],
+        ["Preview run", `${cliCommand()} go --dry-run`],
+        ["Check status", `${cliCommand()} status`]
+      ])
+    };
+  }
+
+  if (!spec.ship) {
+    return {
+      current: `${spec.title} [completed]`,
+      state: "ready for acceptance test and ship",
+      detail: "The spec is complete locally but has not been shipped yet.",
+      commands: withNewWorkCommands([
+        ["Run user test", `${cliCommand()} user-test --run-setup`],
+        ["Preview ship", `${cliCommand()} ship`],
+        ["Check status", `${cliCommand()} status`]
+      ])
+    };
+  }
+
+  return {
+    current: `${spec.title} [shipped]`,
+    state: "ship metadata recorded",
+    detail: spec.githubPrUrl || spec.githubRepoUrl || "The spec has a recorded ship.",
+    commands: withNewWorkCommands([
+      ["Clean worktrees", `${cliCommand()} cleanup --apply --force --branches`],
+      ["Check status", `${cliCommand()} status`]
+    ])
+  };
+}
+
+function withNewWorkCommands(commands = []) {
+  return [
+    ...commands,
+    ["Start new goal", `${cliCommand()} start --goal "..." --type feature`],
+    ["Plan new program", `${cliCommand()} program --goal "..."`]
+  ];
+}
+
+function printNextCommands(commands = []) {
+  if (!commands.length) return;
+  term.section("Recommended Next");
+  for (const [label, command] of commands) term.keyValue(label, command);
+}
+
+async function maybePrintStatus(flags, notionUrl) {
+  if (flags.status === true || flags.status === "true") await status({ ...flags, ntn: notionUrl });
+}
+
 async function userTest(flags = {}) {
   const config = await ensureConfig();
   const notionUrl = await resolveDefaultNotionUrl(config, flags);
@@ -2375,6 +2888,7 @@ async function userTest(flags = {}) {
       if (!createTasks) term.info("Next", "rerun with --create-tasks to add follow-up work to the active spec/program");
     }
     printUserTestNextStep({ run, createTasks });
+    await maybePrintStatus(flags, notionUrl);
   } finally {
     if (!(flags["keep-running"] === true || flags["keep-running"] === "true")) {
       for (const child of startedProcesses) child.kill("SIGTERM");
@@ -2713,11 +3227,21 @@ function userTestAnswerCounts(answers) {
 function printUserTestNextStep({ run, createTasks }) {
   const actionable = run.answers.some((answer) => answer.result === "fail" || answer.result === "tweak");
   if (actionable && createTasks) {
-    term.info("Next", "run `build_fast go` to repair the user-test follow-up tasks");
+    printNextCommands([
+      ["Repair follow-ups", `${cliCommand()} go`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
   } else if (actionable) {
-    term.info("Next", "rerun `build_fast user-test --create-tasks` to turn failures/tweaks into repair tasks");
+    printNextCommands([
+      ["Create follow-up tasks", `${cliCommand()} user-test --create-tasks`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
   } else {
-    term.info("Next", "ship the passed build with `build_fast ship`");
+    printNextCommands([
+      ["Preview ship", `${cliCommand()} ship`],
+      ["Check status", `${cliCommand()} status`],
+      ["Pickup later", `${cliCommand()} pickup`]
+    ]);
   }
 }
 
@@ -2909,7 +3433,18 @@ async function sync(flags) {
   const config = await loadConfig();
   const notionUrl = await resolveDefaultNotionUrl(config, flags);
   const program = await loadProgram(config, notionUrl);
-  if (program) return syncProgram({ config, notionUrl, program });
+  if (program) {
+    await syncProgram({ config, notionUrl, program });
+    if (!flags.suppressNext) {
+      printNextCommands([
+        ["Resume build", `${cliCommand()} go`],
+        ["Check status", `${cliCommand()} status`],
+        ["Pickup later", `${cliCommand()} pickup`]
+      ]);
+    }
+    await maybePrintStatus(flags, notionUrl);
+    return;
+  }
 
   let spec = await loadSpec(config, notionUrl);
   if (!spec) throw new Error("No local spec found. Run plan first.");
@@ -2925,6 +3460,14 @@ async function sync(flags) {
   } else {
     console.log(`Notion sync not completed: ${result.detail}`);
   }
+  if (!flags.suppressNext) {
+    printNextCommands([
+      ["Resume build", `${cliCommand()} go`],
+      ["Check status", `${cliCommand()} status`],
+      ["Pickup later", `${cliCommand()} pickup`]
+    ]);
+  }
+  await maybePrintStatus(flags, notionUrl);
 }
 
 async function syncProgram({ config, notionUrl, program }) {
@@ -3006,15 +3549,15 @@ async function collect(flags) {
   if (program) {
     let spec = await loadSpec(config, notionUrl);
     if (!spec) throw new Error("No active spec found in program drive. Run drive first.");
-    return collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter });
+    return collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter, flags });
   }
 
   let spec = await loadSpec(config, notionUrl);
   if (!spec) throw new Error("No local spec found. Run plan first.");
-  return collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter });
+  return collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter, flags });
 }
 
-async function collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter }) {
+async function collectSpec({ config, notionUrl, spec, apply, force, patch, taskFilter, flags = {} }) {
   const projectRoot = spec.project;
   const projectSubdir = await projectSubdirForSpec(spec);
   const { reports, overlaps, recommendation } = await collectSummary(config, notionUrl, spec, taskFilter);
@@ -3035,7 +3578,7 @@ async function collectSpec({ config, notionUrl, spec, apply, force, patch, taskF
       [
         "Collect refused because multiple completed task worktrees changed the same file.",
         "Use --task <id> to apply one task, or rerun with --force to apply all in task order.",
-        recommendation ? `Recommended: node bin/build_fast.js collect --ntn <page> --task ${recommendation.task.id} --apply` : null,
+        recommendation ? `Recommended: ${cliCommand()} collect --task ${recommendation.task.id} --apply` : null,
         "Overlaps:",
         ...overlaps.map((overlap) => `- ${overlap.file}: ${overlap.taskIds.join(", ")}`)
       ].filter(Boolean).join("\n")
@@ -3065,6 +3608,11 @@ async function collectSpec({ config, notionUrl, spec, apply, force, patch, taskF
 
   printCollectReports(reports, apply);
 
+  if (flags.suppressNext) {
+    await maybePrintStatus(flags, notionUrl);
+    return;
+  }
+
   if (!apply) {
     console.log("Dry run only. Rerun with --apply to copy these files into the main checkout.");
     if (overlaps.length) {
@@ -3072,10 +3620,21 @@ async function collectSpec({ config, notionUrl, spec, apply, force, patch, taskF
       for (const overlap of overlaps) console.log(`  ${overlap.file}: ${overlap.taskIds.join(", ")}`);
       if (recommendation) {
         console.log(`Recommended integration task: ${recommendation.task.id} (${recommendation.reason})`);
-        console.log(`Apply with: node bin/build_fast.js collect --ntn <page> --task ${recommendation.task.id} --apply`);
+        console.log(`Apply with: ${cliCommand()} collect --task ${recommendation.task.id} --apply`);
       }
     }
+    printNextCommands([
+      ["Apply collection", recommendation ? `${cliCommand()} collect --task ${recommendation.task.id} --apply` : `${cliCommand()} collect --apply`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
+  } else {
+    printNextCommands([
+      ["Continue build", `${cliCommand()} go`],
+      ["Run user test", `${cliCommand()} user-test --run-setup`],
+      ["Check status", `${cliCommand()} status`]
+    ]);
   }
+  await maybePrintStatus(flags, notionUrl);
 }
 
 async function printCollectPatches(reports, projectRoot, projectSubdir) {
@@ -3163,12 +3722,22 @@ async function cleanup(flags) {
       total += await cleanupSpec({ spec: programToStandaloneSpec(program, spec), apply, force, deleteBranches, taskFilter, quietEmpty: true });
     }
     if (!total) console.log("No recorded swarm worktrees found to clean up.");
+    printNextCommands([
+      ["Check status", `${cliCommand()} status`],
+      ["Pickup later", `${cliCommand()} pickup`]
+    ]);
+    await maybePrintStatus(flags, notionUrl);
     return;
   }
 
   let spec = await loadSpec(config, notionUrl);
   if (!spec) throw new Error("No local spec found. Run plan first.");
-  return cleanupSpec({ spec, apply, force, deleteBranches, taskFilter });
+  await cleanupSpec({ spec, apply, force, deleteBranches, taskFilter });
+  printNextCommands([
+    ["Check status", `${cliCommand()} status`],
+    ["Pickup later", `${cliCommand()} pickup`]
+  ]);
+  await maybePrintStatus(flags, notionUrl);
 }
 
 async function cleanupSpec({ spec, apply, force, deleteBranches, taskFilter, quietEmpty = false }) {
@@ -4158,7 +4727,8 @@ async function review(flags) {
     projectDir: spec.project,
     runDir: dir,
     autopilot: "intern_mode",
-    permissionProfile: "inherit"
+    permissionProfile: "inherit",
+    ...claudePermissionOptions(flags, config)
   });
   await finishRun(dir, { status: result.code === 0 ? "completed" : "failed", result: result.parsed, exitCode: result.code });
   await writeToNotion(config, notionUrl, `## build_fast Review: ${reviewType}\n\n${result.parsed?.summary || result.stdout || result.stderr}`, { label: `review ${reviewType}` });
@@ -4259,7 +4829,7 @@ async function qaSetup(flags) {
 
   if (!install) {
     console.log("Playwright setup is incomplete. Rerun with --install to install missing pieces.");
-    console.log(`Suggested: node bin/build_fast.js qa-setup --project "${project}" --install`);
+    console.log(`Suggested: ${cliCommand()} qa-setup --project "${project}" --install`);
     return;
   }
 
@@ -4980,6 +5550,12 @@ async function ship(flags) {
   const syncedTargets = await loadShipSummaryTargets(config, notionUrl, Boolean(program && !spec));
   await syncShipMetadataToNotion(config, notionUrl, syncedTargets.length ? syncedTargets : [target], shipPatch);
   console.log(`Ship metadata synced${prUrl ? `: ${prUrl}` : "."}`);
+  printNextCommands([
+    ["Cleanup worktrees", `${cliCommand()} cleanup --apply --force --branches`],
+    ["Check status", `${cliCommand()} status`],
+    ["Pickup later", `${cliCommand()} pickup`]
+  ]);
+  await maybePrintStatus(flags, notionUrl);
 }
 
 function printShipPreview({ projectRoot, projectPathspec, branch, message, changedFiles, collection, repoUrl, publish, createPr, draft, baseBranch, prBody }) {
